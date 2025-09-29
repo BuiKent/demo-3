@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<selector xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- State: Activated (Recording) AND Pressed -->
+    <item android:state_activated="true" android:state_pressed="true"
+          android:drawable="@drawable/bg_circle_button_recording_pressed" />
+
+    <!-- State: Activated (Recording) -->
+    <item android:state_activated="true"
+          android:drawable="@drawable/bg_circle_button_recording" />
+
+    <!-- State: Pressed (Not recording) -->
+    <item android:state_pressed="true"
+          android:drawable="@drawable/bg_circle_button_pressed" />
+
+    <!-- Default State (Not recording, Not pressed) -->
+    <item android:drawable="@drawable/bg_circle_button_normal" />
+</selector>

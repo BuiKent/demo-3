@@ -1,13 +1,15 @@
 package com.example.realtalkenglishwithAI.fragment
 
-import android.content.Intent // Added for Intent
+import android.content.Intent // Keep for other intents if any, or remove if not used elsewhere
 import android.os.Bundle
 import androidx.fragment.app.Fragment
 import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
+import androidx.navigation.fragment.findNavController // Added for Navigation
 import androidx.recyclerview.widget.LinearLayoutManager
-import com.example.realtalkenglishwithAI.activity.StoryActivity // Added for StoryActivity
+// import com.example.realtalkenglishwithAI.activity.StoryActivity // No longer navigating directly to StoryActivity from here
+import com.example.realtalkenglishwithAI.R // Added for R.id access
 import com.example.realtalkenglishwithAI.adapter.RoleplayScenarioAdapter
 import com.example.realtalkenglishwithAI.databinding.FragmentHomeBinding
 import com.example.realtalkenglishwithAI.model.RoleplayScenario
@@ -29,10 +31,20 @@ class HomeFragment : Fragment() {
         super.onViewCreated(view, savedInstanceState)
         setupRoleplayRecyclerView()
 
-        // Set OnClickListener for Reading Today CardView
+        // Set OnClickListener for Reading Today CardView to navigate to StoryReadingFragment
         binding.cardViewReadingToday.setOnClickListener {
-            val intent = Intent(requireActivity(), StoryActivity::class.java)
-            startActivity(intent)
+            // Sample story text. In a real app, you'd fetch this based on the selected story.
+            val sampleStoryText = "Once upon a time, in a land far, far away, there lived a brave Coder. The Coder loved to write Kotlin and build amazing Android apps. One day, a mischievous Bug appeared, causing trouble in the Code Kingdom. The Coder, with skill and determination, set out on a quest to debug the system and restore peace."
+            
+            val bundle = Bundle().apply {
+                putString("story_text", sampleStoryText) // Key matches argument in nav_graph.xml
+            }
+            try {
+                findNavController().navigate(R.id.action_homeFragment_to_storyReadingFragment, bundle)
+            } catch (e: Exception) {
+                // Log error or show a toast if navigation fails (e.g., action ID not found)
+                android.util.Log.e("HomeFragment", "Navigation to StoryReadingFragment failed", e)
+            }
         }
     }
 
