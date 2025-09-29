@@ -7,7 +7,7 @@ import android.graphics.Color // For direct coloring in displayEvaluation
 import android.media.AudioFormat
 import android.media.AudioRecord
 import android.media.MediaPlayer // Or ExoPlayer
-import android.media.MediaRecorder // Corrected: Ensure this import is present and not commented
+import android.media.MediaRecorder 
 import android.os.Bundle
 import android.text.Spannable
 import android.text.SpannableString
@@ -19,7 +19,6 @@ import android.view.ViewGroup
 import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.core.content.ContextCompat
-// import androidx.core.net.toUri // Not used for MediaPlayer in this version
 import androidx.fragment.app.Fragment
 import androidx.fragment.app.activityViewModels
 import com.example.realtalkenglishwithAI.R
@@ -42,7 +41,8 @@ class StoryReadingFragment : Fragment() {
 
     private val voskModelViewModel: VoskModelViewModel by activityViewModels()
 
-    private var storyTextArgument: String? = null
+    private var currentStoryContent: String? = null
+    private var currentStoryTitle: String? = null
 
     // Audio recording variables
     private var audioRecord: AudioRecord? = null
@@ -50,16 +50,16 @@ class StoryReadingFragment : Fragment() {
     private var isRecording = false
     private var recordingThread: Thread? = null
     private var pcmFile: File? = null
-    private var wavFileForPlayback: File? = null // For user's recording playback
+    private var wavFileForPlayback: File? = null 
     private var fileOutputStream: FileOutputStream? = null
 
-    private val sampleRate = 16000 // Standard for Vosk
+    private val sampleRate = 16000 
     private var bufferSize: Int = 0
 
     private var recognizer: Recognizer? = null
     private var targetSentenceForScoring: String = ""
 
-    private var mediaPlayer: MediaPlayer? = null // For playing back user recording
+    private var mediaPlayer: MediaPlayer? = null 
 
     private val requestPermissionLauncher =
         registerForActivityResult(ActivityResultContracts.RequestPermission()) { isGranted: Boolean ->
@@ -73,7 +73,9 @@ class StoryReadingFragment : Fragment() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         arguments?.let {
-            storyTextArgument = it.getString(ARG_STORY_TEXT)
+            currentStoryContent = it.getString(ARG_STORY_CONTENT)
+            currentStoryTitle = it.getString(ARG_STORY_TITLE)
+            targetSentenceForScoring = currentStoryContent ?: ""
         }
         val pcmPath = "${requireContext().externalCacheDir?.absolutePath}/story_sentence_audio.pcm"
         pcmFile = File(pcmPath)
@@ -92,14 +94,13 @@ class StoryReadingFragment : Fragment() {
     override fun onViewCreated(view: View, savedInstanceState: Bundle?) {
         super.onViewCreated(view, savedInstanceState)
 
-        storyTextArgument?.let {
+        currentStoryContent?.let {
             binding.textViewStoryContent.text = it
-            targetSentenceForScoring = it // Store for scoring later
         }
+        Log.d(TAG, "Story Title: $currentStoryTitle, Story Content: $currentStoryContent")
 
         setupClickListeners()
-        observeVoskModelStatus()
-        updateUIForVoskModelState(voskModelViewModel.modelState.value ?: ModelState.IDLE)
+        observeVoskModelStatus() // This will also call updateUIForVoskModelState initially
     }
 
     private fun setupClickListeners() {
@@ -114,40 +115,50 @@ class StoryReadingFragment : Fragment() {
     private fun observeVoskModelStatus() {
         voskModelViewModel.modelState.observe(viewLifecycleOwner) { state ->
             Log.d(TAG, "VoskModelViewModel state changed: $state")
-            updateUIForVoskModelState(state)
-            if (state == ModelState.READY && voskModelViewModel.voskModel != null && recognizer == null) {
-                try {
-                    voskModelViewModel.voskModel?.let {
-                        recognizer = Recognizer(it, sampleRate.toFloat())
-                        Log.i(TAG, "Vosk Recognizer initialized for StoryReadingFragment.")
-                    } ?: run {
-                        Log.e(TAG, "Vosk model is null even when state is READY.")
-                        Toast.makeText(requireContext(), "Speech engine model error.", Toast.LENGTH_LONG).show()
+
+            if (state == ModelState.READY && voskModelViewModel.voskModel != null) {
+                if (recognizer == null) { // Only initialize if not already done
+                    try {
+                        voskModelViewModel.voskModel?.let { model ->
+                            recognizer = Recognizer(model, sampleRate.toFloat())
+                            Log.i(TAG, "Vosk Recognizer initialized for StoryReadingFragment.")
+                        } ?: run {
+                            Log.e(TAG, "Vosk model is null when state is READY and model was checked (should not happen).")
+                        }
+                    } catch (e: Exception) {
+                        Log.e(TAG, "Failed to initialize Vosk Recognizer", e)
+                        Toast.makeText(requireContext(), "Speech recognizer init failed.", Toast.LENGTH_SHORT).show()
+                        recognizer = null // Ensure recognizer is null on failure
                     }
-                } catch (e: Exception) {
-                    Log.e(TAG, "Failed to initialize Vosk Recognizer", e)
-                    Toast.makeText(requireContext(), "Speech recognizer init failed.", Toast.LENGTH_LONG).show()
                 }
-            } else if (state != ModelState.READY) {
-                recognizer?.close()
-                recognizer = null
-                Log.i(TAG, "Vosk Recognizer released due to model state change.")
+            } else { // Not READY or model is null
+                if (recognizer != null) {
+                    recognizer?.close()
+                    recognizer = null
+                    Log.i(TAG, "Vosk Recognizer released due to model state change (not READY or model became null).")
+                }
             }
+            // Always update UI after attempting to set up or tear down recognizer based on current state
+            updateUIForVoskModelState(state)
         }
     }
 
     private fun updateUIForVoskModelState(state: ModelState) {
         if (!isAdded || _binding == null) return
+        
         val modelIsReadyForUse = state == ModelState.READY && voskModelViewModel.voskModel != null && recognizer != null
 
         binding.buttonRecordStorySentence.isEnabled = modelIsReadyForUse
         binding.buttonRecordStorySentence.alpha = if (modelIsReadyForUse) 1.0f else 0.5f
+        
+        // Note: buttonPlayUserSentenceRecording's state is managed separately after recording completes or fails
+        // and when recording starts (disabled).
 
         if (!modelIsReadyForUse) {
             if (isRecording) {
                 stopRecordingInternal(false) 
             }
-            Log.w(TAG, "Vosk model or recognizer not ready. Recording disabled.")
+            // Log.w(TAG, "Vosk model or recognizer not ready. Recording disabled.") // This log can be verbose if model is loading
         }
     }
 
@@ -181,7 +192,8 @@ class StoryReadingFragment : Fragment() {
         wavFileForPlayback?.delete()
 
         binding.textViewSentenceScore.visibility = View.GONE
-        binding.textViewStoryContent.text = targetSentenceForScoring 
+        // Reset text to original full story content before new recording
+        binding.textViewStoryContent.text = currentStoryContent 
         binding.buttonPlayUserSentenceRecording.isEnabled = false
         binding.buttonPlayUserSentenceRecording.alpha = 0.5f
 
@@ -195,7 +207,7 @@ class StoryReadingFragment : Fragment() {
             bufferSize = max(minBufferSize, 4096)
 
             audioRecord = AudioRecord(
-                MediaRecorder.AudioSource.MIC, // This line requires MediaRecorder import
+                MediaRecorder.AudioSource.MIC, 
                 sampleRate,
                 AudioFormat.CHANNEL_IN_MONO,
                 AudioFormat.ENCODING_PCM_16BIT,
@@ -277,6 +289,9 @@ class StoryReadingFragment : Fragment() {
         } else if (processAudio) {
             Log.w(TAG, "PCM file for story is missing or empty. Cannot process.")
             Toast.makeText(requireContext(), "Recording was empty or failed.", Toast.LENGTH_SHORT).show()
+            // Ensure play button is disabled if processing fails early
+            binding.buttonPlayUserSentenceRecording.isEnabled = false
+            binding.buttonPlayUserSentenceRecording.alpha = 0.5f
         }
     }
 
@@ -285,6 +300,9 @@ class StoryReadingFragment : Fragment() {
         if (currentRecognizer == null || voskModelViewModel.modelState.value != ModelState.READY) {
             Log.e(TAG, "Vosk recognizer not available for post-processing.")
             Toast.makeText(requireContext(), "Speech engine not ready for processing.", Toast.LENGTH_SHORT).show()
+            // Ensure play button is disabled if recognizer is not ready
+            binding.buttonPlayUserSentenceRecording.isEnabled = false
+            binding.buttonPlayUserSentenceRecording.alpha = 0.5f
             return
         }
 
@@ -324,6 +342,11 @@ class StoryReadingFragment : Fragment() {
                 Log.e(TAG, "Error in StoryPostProcessThread", e)
                 activity?.runOnUiThread {
                     Toast.makeText(requireContext(), "Error processing audio.", Toast.LENGTH_SHORT).show()
+                }
+                // Fallback UI update on error
+                activity?.runOnUiThread {
+                    binding.buttonPlayUserSentenceRecording.isEnabled = false
+                    binding.buttonPlayUserSentenceRecording.alpha = 0.5f
                 }
                 return@thread
             }
@@ -459,13 +482,15 @@ class StoryReadingFragment : Fragment() {
     }
 
     companion object {
-        private const val ARG_STORY_TEXT = "story_text"
+        private const val ARG_STORY_CONTENT = "story_content" 
+        private const val ARG_STORY_TITLE = "story_title"   
         private const val TAG = "StoryReadingFragment"
 
         @JvmStatic
-        fun newInstance(storyText: String) = StoryReadingFragment().apply {
+        fun newInstance(storyTitle: String, storyContent: String) = StoryReadingFragment().apply {
             arguments = Bundle().apply {
-                putString(ARG_STORY_TEXT, storyText)
+                putString(ARG_STORY_TITLE, storyTitle)
+                putString(ARG_STORY_CONTENT, storyContent)
             }
         }
     }

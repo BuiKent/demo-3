@@ -33,11 +33,13 @@ class HomeFragment : Fragment() {
 
         // Set OnClickListener for Reading Today CardView to navigate to StoryReadingFragment
         binding.cardViewReadingToday.setOnClickListener {
-            // Sample story text. In a real app, you'd fetch this based on the selected story.
-            val sampleStoryText = "Once upon a time, in a land far, far away, there lived a brave Coder. The Coder loved to write Kotlin and build amazing Android apps. One day, a mischievous Bug appeared, causing trouble in the Code Kingdom. The Coder, with skill and determination, set out on a quest to debug the system and restore peace."
+            // Sample story data. In a real app, you'd fetch this based on the selected story.
+            val sampleStoryTitle = "Monday Story" // Added story title
+            val sampleStoryContent = "Once upon a time, in a land far, far away, there lived a brave Coder. The Coder loved to write Kotlin and build amazing Android apps. One day, a mischievous Bug appeared, causing trouble in the Code Kingdom. The Coder, with skill and determination, set out on a quest to debug the system and restore peace."
             
             val bundle = Bundle().apply {
-                putString("story_text", sampleStoryText) // Key matches argument in nav_graph.xml
+                putString("story_title", sampleStoryTitle) // Key matches argument in nav_graph.xml
+                putString("story_content", sampleStoryContent) // Key matches argument in nav_graph.xml (renamed from story_text)
             }
             try {
                 findNavController().navigate(R.id.action_homeFragment_to_storyReadingFragment, bundle)

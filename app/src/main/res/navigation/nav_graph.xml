@@ -41,11 +41,15 @@
     <fragment
         android:id="@+id/storyReadingFragment"
         android:name="com.example.realtalkenglishwithAI.fragment.StoryReadingFragment"
-        android:label="Read Story"
+        android:label="Read Story" 
         tools:layout="@layout/fragment_story_reading">
         <argument
-            android:name="story_text" 
+            android:name="story_content" 
             app:argType="string" />
+        <argument
+            android:name="story_title"
+            app:argType="string"
+            android:defaultValue="Story" /> <!-- Added default value -->
     </fragment>
 
     <!-- Old storyFragment, if still used independently, keep it. Otherwise, consider removing if StoryReadingFragment replaces its functionality. -->
