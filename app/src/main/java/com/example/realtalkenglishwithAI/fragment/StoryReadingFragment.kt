@@ -3,24 +3,24 @@ package com.example.realtalkenglishwithAI.fragment
 import android.Manifest
 import android.content.Context
 import android.content.pm.PackageManager
-import android.graphics.Color // For direct coloring in displayEvaluation
+import android.graphics.Color
 import android.media.AudioFormat
 import android.media.AudioRecord
-import android.media.MediaPlayer // Or ExoPlayer
-import android.media.MediaRecorder 
+import android.media.MediaPlayer
+import android.media.MediaRecorder
 import android.os.Bundle
 import android.text.Spannable
 import android.text.SpannableString
 import android.text.style.ForegroundColorSpan
 import android.util.Log
-import android.view.LayoutInflater
-import android.view.View
-import android.view.ViewGroup
+import android.view.* // Added for Menu
 import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.appcompat.app.AppCompatActivity // Added for Toolbar
 import androidx.core.content.ContextCompat
 import androidx.fragment.app.Fragment
 import androidx.fragment.app.activityViewModels
+import androidx.navigation.fragment.findNavController // Added for Toolbar back navigation
 import com.example.realtalkenglishwithAI.R
 import com.example.realtalkenglishwithAI.databinding.FragmentStoryReadingBinding
 import com.example.realtalkenglishwithAI.utils.PronunciationScorer
@@ -50,16 +50,16 @@ class StoryReadingFragment : Fragment() {
     private var isRecording = false
     private var recordingThread: Thread? = null
     private var pcmFile: File? = null
-    private var wavFileForPlayback: File? = null 
+    private var wavFileForPlayback: File? = null
     private var fileOutputStream: FileOutputStream? = null
 
-    private val sampleRate = 16000 
+    private val sampleRate = 16000
     private var bufferSize: Int = 0
 
     private var recognizer: Recognizer? = null
     private var targetSentenceForScoring: String = ""
 
-    private var mediaPlayer: MediaPlayer? = null 
+    private var mediaPlayer: MediaPlayer? = null
 
     private val requestPermissionLauncher =
         registerForActivityResult(ActivityResultContracts.RequestPermission()) { isGranted: Boolean ->
@@ -81,6 +81,8 @@ class StoryReadingFragment : Fragment() {
         pcmFile = File(pcmPath)
         val wavPath = "${requireContext().externalCacheDir?.absolutePath}/story_sentence_audio_playback.wav"
         wavFileForPlayback = File(wavPath)
+
+        setHasOptionsMenu(true) // Indicate that this fragment has an options menu for the toolbar
     }
 
     override fun onCreateView(
@@ -94,14 +96,47 @@ class StoryReadingFragment : Fragment() {
     override fun onViewCreated(view: View, savedInstanceState: Bundle?) {
         super.onViewCreated(view, savedInstanceState)
 
+        setupToolbar() // Call Toolbar setup
+
         currentStoryContent?.let {
             binding.textViewStoryContent.text = it
         }
         Log.d(TAG, "Story Title: $currentStoryTitle, Story Content: $currentStoryContent")
 
         setupClickListeners()
-        observeVoskModelStatus() // This will also call updateUIForVoskModelState initially
+        observeVoskModelStatus()
     }
+
+    private fun setupToolbar() {
+        if (activity is AppCompatActivity) {
+            (activity as AppCompatActivity).setSupportActionBar(binding.toolbarStoryReading)
+        }
+        (activity as? AppCompatActivity)?.supportActionBar?.title = currentStoryTitle ?: "Story" // Set title
+        (activity as? AppCompatActivity)?.supportActionBar?.setDisplayHomeAsUpEnabled(true) // Show back button
+        (activity as? AppCompatActivity)?.supportActionBar?.setDisplayShowHomeEnabled(true) // Ensure back button is shown
+        // TODO: Apply Script font to toolbar title if available
+    }
+
+    override fun onCreateOptionsMenu(menu: Menu, inflater: MenuInflater) {
+        inflater.inflate(R.menu.story_reading_menu, menu)
+        super.onCreateOptionsMenu(menu, inflater)
+    }
+
+    override fun onOptionsItemSelected(item: MenuItem): Boolean {
+        return when (item.itemId) {
+            android.R.id.home -> { // Handle back button press
+                findNavController().navigateUp()
+                true
+            }
+            R.id.action_play_story_audio -> {
+                Toast.makeText(requireContext(), "Play story audio clicked (Not implemented yet)", Toast.LENGTH_SHORT).show()
+                // TODO: Implement actual audio playback of the story if needed
+                true
+            }
+            else -> super.onOptionsItemSelected(item)
+        }
+    }
+
 
     private fun setupClickListeners() {
         binding.buttonRecordStorySentence.setOnClickListener {
@@ -117,7 +152,7 @@ class StoryReadingFragment : Fragment() {
             Log.d(TAG, "VoskModelViewModel state changed: $state")
 
             if (state == ModelState.READY && voskModelViewModel.voskModel != null) {
-                if (recognizer == null) { // Only initialize if not already done
+                if (recognizer == null) { 
                     try {
                         voskModelViewModel.voskModel?.let { model ->
                             recognizer = Recognizer(model, sampleRate.toFloat())
@@ -128,17 +163,16 @@ class StoryReadingFragment : Fragment() {
                     } catch (e: Exception) {
                         Log.e(TAG, "Failed to initialize Vosk Recognizer", e)
                         Toast.makeText(requireContext(), "Speech recognizer init failed.", Toast.LENGTH_SHORT).show()
-                        recognizer = null // Ensure recognizer is null on failure
+                        recognizer = null 
                     }
                 }
-            } else { // Not READY or model is null
+            } else { 
                 if (recognizer != null) {
                     recognizer?.close()
                     recognizer = null
                     Log.i(TAG, "Vosk Recognizer released due to model state change (not READY or model became null).")
                 }
             }
-            // Always update UI after attempting to set up or tear down recognizer based on current state
             updateUIForVoskModelState(state)
         }
     }
@@ -151,14 +185,10 @@ class StoryReadingFragment : Fragment() {
         binding.buttonRecordStorySentence.isEnabled = modelIsReadyForUse
         binding.buttonRecordStorySentence.alpha = if (modelIsReadyForUse) 1.0f else 0.5f
         
-        // Note: buttonPlayUserSentenceRecording's state is managed separately after recording completes or fails
-        // and when recording starts (disabled).
-
         if (!modelIsReadyForUse) {
             if (isRecording) {
                 stopRecordingInternal(false) 
             }
-            // Log.w(TAG, "Vosk model or recognizer not ready. Recording disabled.") // This log can be verbose if model is loading
         }
     }
 
@@ -192,7 +222,6 @@ class StoryReadingFragment : Fragment() {
         wavFileForPlayback?.delete()
 
         binding.textViewSentenceScore.visibility = View.GONE
-        // Reset text to original full story content before new recording
         binding.textViewStoryContent.text = currentStoryContent 
         binding.buttonPlayUserSentenceRecording.isEnabled = false
         binding.buttonPlayUserSentenceRecording.alpha = 0.5f
@@ -289,7 +318,6 @@ class StoryReadingFragment : Fragment() {
         } else if (processAudio) {
             Log.w(TAG, "PCM file for story is missing or empty. Cannot process.")
             Toast.makeText(requireContext(), "Recording was empty or failed.", Toast.LENGTH_SHORT).show()
-            // Ensure play button is disabled if processing fails early
             binding.buttonPlayUserSentenceRecording.isEnabled = false
             binding.buttonPlayUserSentenceRecording.alpha = 0.5f
         }
@@ -300,7 +328,6 @@ class StoryReadingFragment : Fragment() {
         if (currentRecognizer == null || voskModelViewModel.modelState.value != ModelState.READY) {
             Log.e(TAG, "Vosk recognizer not available for post-processing.")
             Toast.makeText(requireContext(), "Speech engine not ready for processing.", Toast.LENGTH_SHORT).show()
-            // Ensure play button is disabled if recognizer is not ready
             binding.buttonPlayUserSentenceRecording.isEnabled = false
             binding.buttonPlayUserSentenceRecording.alpha = 0.5f
             return
@@ -317,7 +344,6 @@ class StoryReadingFragment : Fragment() {
                     currentRecognizer.reset() 
                     while (fis.read(buffer).also { bytesRead = it } > 0) {
                         if (currentRecognizer.acceptWaveForm(buffer, bytesRead)) {
-                            // Log.d(TAG, "Partial: ${currentRecognizer.partialResult}");
                         }
                     }
                 }
@@ -343,7 +369,6 @@ class StoryReadingFragment : Fragment() {
                 activity?.runOnUiThread {
                     Toast.makeText(requireContext(), "Error processing audio.", Toast.LENGTH_SHORT).show()
                 }
-                // Fallback UI update on error
                 activity?.runOnUiThread {
                     binding.buttonPlayUserSentenceRecording.isEnabled = false
                     binding.buttonPlayUserSentenceRecording.alpha = 0.5f
@@ -448,18 +473,18 @@ class StoryReadingFragment : Fragment() {
         val blockAlign = (channels * bitsPerSample / 8).toShort()
 
         header[0] = 'R'.code.toByte(); header[1] = 'I'.code.toByte(); header[2] = 'F'.code.toByte(); header[3] = 'F'.code.toByte()
-        header[4] = (totalFileSize and 0xff).toByte(); header[5] = (totalFileSize shr 8 and 0xff).toByte(); header[6] = (totalFileSize shr 16 and 0xff).toByte(); header[7] = (totalFileSize shr 24 and 0xff).toByte()
+        header[4] = (totalFileSize and 0xff).toByte(); header[5] = ((totalFileSize shr 8) and 0xff).toByte(); header[6] = ((totalFileSize shr 16) and 0xff).toByte(); header[7] = ((totalFileSize shr 24) and 0xff).toByte()
         header[8] = 'W'.code.toByte(); header[9] = 'A'.code.toByte(); header[10] = 'V'.code.toByte(); header[11] = 'E'.code.toByte()
         header[12] = 'f'.code.toByte(); header[13] = 'm'.code.toByte(); header[14] = 't'.code.toByte(); header[15] = ' '.code.toByte()
         header[16] = 16; header[17] = 0; header[18] = 0; header[19] = 0 
         header[20] = 1; header[21] = 0 
         header[22] = channels.toByte(); header[23] = 0 
-        header[24] = (sampleRate and 0xff).toByte(); header[25] = (sampleRate shr 8 and 0xff).toByte(); header[26] = (sampleRate shr 16 and 0xff).toByte(); header[27] = (sampleRate shr 24 and 0xff).toByte()
-        header[28] = (byteRate and 0xff).toByte(); header[29] = (byteRate shr 8 and 0xff).toByte(); header[30] = (byteRate shr 16 and 0xff).toByte(); header[31] = (byteRate shr 24 and 0xff).toByte()
-        header[32] = blockAlign.toByte(); header[33] = (blockAlign.toInt() shr 8 and 0xff).toByte() 
+        header[24] = (sampleRate and 0xff).toByte(); header[25] = ((sampleRate shr 8) and 0xff).toByte(); header[26] = ((sampleRate shr 16) and 0xff).toByte(); header[27] = ((sampleRate shr 24) and 0xff).toByte()
+        header[28] = (byteRate and 0xff).toByte(); header[29] = ((byteRate shr 8) and 0xff).toByte(); header[30] = ((byteRate shr 16) and 0xff).toByte(); header[31] = ((byteRate shr 24) and 0xff).toByte()
+        header[32] = blockAlign.toByte(); header[33] = ((blockAlign.toInt() shr 8) and 0xff).toByte() 
         header[34] = bitsPerSample.toByte(); header[35] = 0 
         header[36] = 'd'.code.toByte(); header[37] = 'a'.code.toByte(); header[38] = 't'.code.toByte(); header[39] = 'a'.code.toByte()
-        header[40] = (dataSize and 0xff).toByte(); header[41] = (dataSize shr 8 and 0xff).toByte(); header[42] = (dataSize shr 16 and 0xff).toByte(); header[43] = (dataSize shr 24 and 0xff).toByte()
+        header[40] = (dataSize and 0xff).toByte(); header[41] = ((dataSize shr 8) and 0xff).toByte(); header[42] = ((dataSize shr 16) and 0xff).toByte(); header[43] = ((dataSize shr 24) and 0xff).toByte()
         return header
     }
 
@@ -477,6 +502,8 @@ class StoryReadingFragment : Fragment() {
         recognizer = null
         mediaPlayer?.release()
         mediaPlayer = null
+        // Ensure the support action bar is cleared to avoid issues if activity is reused by other fragments
+        (activity as? AppCompatActivity)?.setSupportActionBar(null)
         _binding = null
         Log.d(TAG, "StoryReadingFragment onDestroyView")
     }
