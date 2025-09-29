@@ -1,0 +1,25 @@
+<resources xmlns:tools="http://schemas.android.com/tools">
+    <!-- Base application theme. -->
+    <style name="Theme.RealEng" parent="Theme.MaterialComponents.Light.NoActionBar">
+        <!-- Primary brand color. -->
+        <item name="colorPrimary">@color/colorPrimary</item>
+        <item name="colorOnPrimary">@color/white</item>
+        <!-- Status bar color. -->
+        <item name="android:statusBarColor">@color/white</item>
+        <item name="android:windowLightStatusBar">true</item>
+        <!-- Accent color reference -->
+        <item name="colorAccent">@color/colorAccent</item>
+    </style>
+
+    <style name="ShapeAppearance.App.CircleImageView" parent="">
+        <item name="cornerFamily">rounded</item>
+        <item name="cornerSize">50%</item>
+    </style>
+
+    <!-- AppBarOverlay: Since base is Light.NoActionBar, this overlay is for cases where AppBar might need specific theming -->
+    <style name="Theme.RealTalkEnglishWithAI.AppBarOverlay" parent="ThemeOverlay.MaterialComponents.Light" />
+
+    <!-- PopupOverlay: For popup menus, typically light themed -->
+    <style name="Theme.RealTalkEnglishWithAI.PopupOverlay" parent="ThemeOverlay.MaterialComponents.Light" />
+
+</resources>

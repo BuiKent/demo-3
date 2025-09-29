@@ -1,0 +1,56 @@
+<resources>
+    <string name="app_name">RealEng</string>
+
+    <!-- Bottom Navigation -->
+    <string name="home">Home</string>
+    <string name="practice">Practice</string>
+    <string name="progress">Progress</string>
+    <string name="profile">Profile</string>
+
+    <!-- Home Screen -->
+    <string name="speak_with_ai">Speak with AI</string>
+    <string name="practice_with_ai_teacher">Practice English with your personal AI teacher.</string>
+    <string name="start_lesson">Start lesson</string>
+    <string name="role_play">Role-play</string>
+    <string name="see_all">See all</string>
+    <string name="scenario_greetings">Greetings</string>
+    <string name="scenario_at_home">At Home</string>
+    <string name="scenario_at_cafe">At a Cafe</string>
+    <string name="scenario_travel">Travel</string>
+
+    <!-- Practice Screen -->
+    <string name="search_hint">Search phrases or translations</string>
+    <string name="word_not_found">Word not found. Please try another word.</string>
+    <string name="clear_search">Clear search</string>
+    <string name="score_display_format">%1$d%%</string>
+
+    <!-- Profile Screen -->
+    <string name="profile_email_placeholder">super@gmail.com</string>
+    <string name="age_format">Age: %d</string>
+    <string name="notifications">Notifications</string>
+    <string name="remove_ads">Remove Ads</string>
+    <string name="privacy_policy">Privacy Policy</string>
+    <string name="terms_of_use">Terms of Use</string>
+    <string name="support">Support</string>
+    <string name="log_out">Log Out</string>
+    <string name="version">Version %s</string>
+    <string name="edit_name">Edit Name</string>
+    <string name="edit_age">Edit Age</string>
+    <string name="enter_new_name">Enter new name</string>
+    <string name="enter_new_age">Enter new age</string>
+    <string name="save">Save</string>
+    <string name="cancel">Cancel</string>
+    <string name="support_info">For support, please contact us at:\n\nPhone: +1 (555) 123–4567\nEmail: support@realeng.app</string>
+    <string name="lorem_ipsum">Lorem ipsum dolor sit amet, consectetur adipiscing elit. Sed do eiusmod tempor incididunt ut labore et dolore magna aliqua. Ut enim ad minim veniam, quis nostrud exercitation ullamco laboris nisi ut aliquip ex ea commodo consequat. Duis aute irure dolor in reprehenderit in voluptate velit esse cillum dolore eu fugiat nulla pariatur. Excepteur sint occaecat cupidatat non proident, sunt in culpa qui officia deserunt mollit anim id est laborum.</string>
+
+    <!-- Dialogs -->
+    <string name="close">Close</string>
+    <string name="choose_your_avatar">Choose your avatar</string>
+
+    <!-- Story Activity / Fragment -->
+    <string name="today_s_story">Monday</string>
+    <string name="todays_story_content">This is a story for Monday. The build process can fail if resources are not found in the layout file.</string>
+    <string name="record_audio">Record Audio</string>
+    <string name="play_audio">Play Audio</string>
+
+</resources>

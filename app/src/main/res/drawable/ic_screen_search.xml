@@ -1,0 +1,34 @@
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+
+    <!-- iPhone Body -->
+    <path
+        android:fillColor="#BDBDBD"
+        android:pathData="M18,0H6v24h12V0z"/>
+
+    <!-- iPhone Screen (Even Thinner Bezels) -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M17.75,0.25H6.25v23.5h11.5V0.25z"/>
+
+    <!-- iPhone Notch (Moved closer to top) -->
+    <path
+        android:fillColor="#000000"
+        android:pathData="M14.5,1.2c0,-0.22 -0.18,-0.4 -0.4,-0.4h-4.2c-0.22,0 -0.4,0.18 -0.4,0.4v0.6c0,0.22 0.18,0.4 0.4,0.4h4.2c0.22,0 0.4,-0.18 0.4,-0.4V1.2z"/>
+
+    <!-- Magnifying Glass (Smaller, red) -->
+    <path
+        android:strokeColor="#F44336"
+        android:strokeWidth="1.5"
+        android:pathData="M13,12.5m-3,0a3,3 0,1 1,6 0a3,3 0,1 1,-6 0"/>
+    <path
+        android:strokeColor="#F44336"
+        android:strokeWidth="1.5"
+        android:strokeLineCap="round"
+        android:pathData="M15.1,14.6L17,16.5"/>
+
+</vector>
+
