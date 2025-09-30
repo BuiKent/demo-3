@@ -14,23 +14,24 @@ import android.text.Spannable
 import android.text.SpannableString
 import android.text.style.ForegroundColorSpan
 import android.util.Log
-import android.util.TypedValue // Added for SP unit
-import android.view.* 
-import android.widget.LinearLayout // Added for type hint
-import android.widget.TextView 
+import android.util.TypedValue
+import android.view.*
+import android.widget.LinearLayout
+import android.widget.TextView
 import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.appcompat.app.AppCompatActivity 
+import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
-import androidx.core.content.res.ResourcesCompat 
+import androidx.core.content.res.ResourcesCompat
 import androidx.fragment.app.Fragment
 import androidx.fragment.app.activityViewModels
-import androidx.navigation.fragment.findNavController 
+import androidx.navigation.fragment.findNavController
 import com.example.realtalkenglishwithAI.R
 import com.example.realtalkenglishwithAI.databinding.FragmentStoryReadingBinding
 import com.example.realtalkenglishwithAI.utils.PronunciationScorer
 import com.example.realtalkenglishwithAI.viewmodel.ModelState
 import com.example.realtalkenglishwithAI.viewmodel.VoskModelViewModel
+import org.json.JSONObject
 import org.vosk.Recognizer
 import java.io.File
 import java.io.FileInputStream
@@ -38,7 +39,7 @@ import java.io.FileOutputStream
 import java.io.IOException
 import kotlin.concurrent.thread
 import kotlin.math.max
-import kotlin.math.min // Added for levenshtein and render logic
+import kotlin.math.min
 
 class StoryReadingFragment : Fragment() {
 
@@ -62,9 +63,31 @@ class StoryReadingFragment : Fragment() {
     private var bufferSize: Int = 0
 
     private var recognizer: Recognizer? = null
-    private var targetSentenceForScoring: String = ""
+    private var targetSentenceForScoring: String = "" // Should be the full story content
 
     private var mediaPlayer: MediaPlayer? = null
+
+    // --- Colors ---
+    private var colorDefaultText: Int = Color.BLACK
+    private var colorTemporaryHighlight: Int = Color.LTGRAY
+    private var colorCorrectWord: Int = Color.GREEN
+    private var colorIncorrectWord: Int = Color.RED
+
+    // --- Word and Sentence Tracking ---
+    private data class WordInfo(
+        val originalText: String,
+        val normalizedText: String,
+        val sentenceIndex: Int,
+        val wordIndexInSentence: Int, // Index of this word within its sentence
+        val startCharInSentence: Int, // Start char index of this word in its original sentence text
+        val endCharInSentence: Int,   // End char index of this word in its original sentence text
+        var currentSpan: ForegroundColorSpan? = null // To manage removing specific spans if needed
+    )
+
+    private val sentenceTextViews = mutableListOf<TextView>()
+    private val allWordInfosInStory = mutableListOf<WordInfo>()
+    private var currentHighlightedWordIndex = -1 // Tracks the last word highlighted by partial result
+
 
     private val requestPermissionLauncher =
         registerForActivityResult(ActivityResultContracts.RequestPermission()) { isGranted: Boolean ->
@@ -87,7 +110,13 @@ class StoryReadingFragment : Fragment() {
         val wavPath = "${requireContext().externalCacheDir?.absolutePath}/story_sentence_audio_playback.wav"
         wavFileForPlayback = File(wavPath)
 
-        setHasOptionsMenu(true) 
+        setHasOptionsMenu(true)
+
+        // Initialize colors from resources
+        colorDefaultText = ContextCompat.getColor(requireContext(), android.R.color.black) // Or your specific default text color
+        colorTemporaryHighlight = ContextCompat.getColor(requireContext(), R.color.gray_500)
+        colorCorrectWord = ContextCompat.getColor(requireContext(), R.color.blue_500)
+        colorIncorrectWord = ContextCompat.getColor(requireContext(), R.color.red_500)
     }
 
     override fun onCreateView(
@@ -102,29 +131,135 @@ class StoryReadingFragment : Fragment() {
         super.onViewCreated(view, savedInstanceState)
         setupToolbar()
         currentStoryContent?.let {
-            if (isAdded && _binding != null) { // Ensure fragment is added
+            if (isAdded && _binding != null) { 
                 displayInitialStoryContent(it, binding.linearLayoutResultsContainer)
             }
         }
         Log.d(TAG, "Story Title: $currentStoryTitle, Story Content: $currentStoryContent")
         setupClickListeners()
         observeVoskModelStatus()
+        binding.textViewPartialTranscript.visibility = View.GONE 
     }
 
     private fun displayInitialStoryContent(storyText: String, container: LinearLayout) {
         if (!isAdded || _binding == null) return
         container.removeAllViews()
+        sentenceTextViews.clear()
+        allWordInfosInStory.clear()
+        currentHighlightedWordIndex = -1
+
         val sentences = storyText.split(Regex("(?<=[.!?;:])\\s+")).filter { it.isNotBlank() }
-        for (sentence in sentences) {
+        var globalWordCounter = 0
+        sentences.forEachIndexed { sentenceIdx, sentenceStr ->
             val tv = TextView(requireContext()).apply {
-                text = sentence
-                setTextSize(TypedValue.COMPLEX_UNIT_SP, 18f) 
-                setTextColor(Color.BLACK) 
+                text = SpannableString(sentenceStr) // Use SpannableString from the start
+                setTextSize(TypedValue.COMPLEX_UNIT_SP, 18f)
+                setTextColor(colorDefaultText)
                 setPadding(4, 8, 4, 8)
                 setLineSpacing(0f, 1.2f)
             }
             container.addView(tv)
+            sentenceTextViews.add(tv)
+
+            var currentWordStartChar = 0
+            val wordsInSentence = sentenceStr.split(Regex("\\s+")).filter { it.isNotBlank() }
+            wordsInSentence.forEachIndexed { wordIdxInSent, word ->
+                val normalizedWord = normalizeToken(word)
+                if (normalizedWord.isNotEmpty()) {
+                    val originalWordStart = sentenceStr.indexOf(word, currentWordStartChar)
+                    if (originalWordStart != -1) {
+                        val originalWordEnd = originalWordStart + word.length
+                        allWordInfosInStory.add(
+                            WordInfo(
+                                originalText = word,
+                                normalizedText = normalizedWord,
+                                sentenceIndex = sentenceIdx,
+                                wordIndexInSentence = wordIdxInSent,
+                                startCharInSentence = originalWordStart,
+                                endCharInSentence = originalWordEnd
+                            )
+                        )
+                        currentWordStartChar = originalWordEnd // Important: Update for next search in sentence
+                        globalWordCounter++
+                    } else {
+                        Log.w(TAG, "Word '$word' not found in sentence '$sentenceStr' starting from char $currentWordStartChar")
+                    }
+                }
+            }
         }
+    }
+
+    private fun clearAllSpansFromTextViews() {
+        if (!isAdded) return
+        sentenceTextViews.forEach { tv ->
+            val spannable = tv.text as? SpannableString ?: SpannableString(tv.text)
+            val spans = spannable.getSpans(0, spannable.length, ForegroundColorSpan::class.java)
+            spans.forEach { spannable.removeSpan(it) }
+            tv.text = spannable // Re-assign to reflect span removal
+            tv.setTextColor(colorDefaultText) // Ensure default color if spans are just removed
+        }
+        allWordInfosInStory.forEach { it.currentSpan = null }
+    }
+
+    private fun updateWordSpan(wordInfo: WordInfo, color: Int) {
+        if (!isAdded || wordInfo.sentenceIndex >= sentenceTextViews.size) return
+        val tv = sentenceTextViews[wordInfo.sentenceIndex]
+        val spannable = tv.text as? SpannableString ?: SpannableString(tv.text)
+        
+        wordInfo.currentSpan?.let { spannable.removeSpan(it) }
+
+        val newSpan = ForegroundColorSpan(color)
+        try {
+            spannable.setSpan(
+                newSpan,
+                wordInfo.startCharInSentence,
+                wordInfo.endCharInSentence.coerceAtMost(spannable.length),
+                Spannable.SPAN_EXCLUSIVE_EXCLUSIVE
+            )
+            wordInfo.currentSpan = newSpan
+            tv.text = spannable 
+        } catch (e: Exception) {
+            Log.e(TAG, "Error applying span to '${wordInfo.originalText}' at [${wordInfo.startCharInSentence}-${wordInfo.endCharInSentence}] in sentence ${wordInfo.sentenceIndex}", e)
+        }
+    }
+
+    private fun applyTemporaryHighlights(partialTranscript: String) {
+        if (!isAdded || _binding == null) return
+
+        val partialWords = partialTranscript.split(Regex("\\s+")).map { normalizeToken(it) }.filter { it.isNotEmpty() }
+        
+        // Clear previous temporary highlights before applying new ones
+        for (i in 0..currentHighlightedWordIndex) {
+            if (i < allWordInfosInStory.size) {
+                updateWordSpan(allWordInfosInStory[i], colorDefaultText) // Reset to default
+            }
+        }
+        // If partial is empty, reset all and return
+        if (partialWords.isEmpty()) {
+            currentHighlightedWordIndex = -1
+            return
+        }
+
+        var storyWordIdx = 0
+        var partialWordIdx = 0
+        var lastSuccessfullyMatchedStoryWordGlobalIndex = -1
+
+        while (storyWordIdx < allWordInfosInStory.size && partialWordIdx < partialWords.size) {
+            val storyWordInfo = allWordInfosInStory[storyWordIdx]
+            val partialWord = partialWords[partialWordIdx]
+
+            if (storyWordInfo.normalizedText == partialWord) {
+                updateWordSpan(storyWordInfo, colorTemporaryHighlight)
+                lastSuccessfullyMatchedStoryWordGlobalIndex = storyWordIdx
+                partialWordIdx++
+            } else {
+                // If there's a mismatch, stop highlighting further for this partial result.
+                // We only highlight a continuous sequence from the beginning of the story.
+                break 
+            }
+            storyWordIdx++
+        }
+        currentHighlightedWordIndex = lastSuccessfullyMatchedStoryWordGlobalIndex
     }
 
     private fun setupToolbar() {
@@ -132,19 +267,19 @@ class StoryReadingFragment : Fragment() {
             (activity as AppCompatActivity).setSupportActionBar(binding.toolbarStoryReading)
         }
         val actionBar = (activity as? AppCompatActivity)?.supportActionBar
-        actionBar?.title = currentStoryTitle ?: "Story" 
-        actionBar?.setDisplayHomeAsUpEnabled(true) 
-        actionBar?.setDisplayShowHomeEnabled(true) 
+        actionBar?.title = currentStoryTitle ?: "Story"
+        actionBar?.setDisplayHomeAsUpEnabled(true)
+        actionBar?.setDisplayShowHomeEnabled(true)
 
         try {
-            var typeface: Typeface? = ResourcesCompat.getFont(requireContext(), R.font.dancing_script)
+            val typeface: Typeface? = ResourcesCompat.getFont(requireContext(), R.font.dancing_script)
             for (i in 0 until binding.toolbarStoryReading.childCount) {
                 val childView = binding.toolbarStoryReading.getChildAt(i)
                 if (childView is TextView) {
                     if (childView.text.toString().equals(actionBar?.title?.toString(), ignoreCase = true)) {
                         childView.typeface = typeface
-                        childView.setTextColor(Color.parseColor("#333333")) 
-                        break 
+                        childView.setTextColor(Color.parseColor("#333333"))
+                        break
                     }
                 }
             }
@@ -160,7 +295,7 @@ class StoryReadingFragment : Fragment() {
 
     override fun onOptionsItemSelected(item: MenuItem): Boolean {
         return when (item.itemId) {
-            android.R.id.home -> { 
+            android.R.id.home -> {
                 findNavController().navigateUp()
                 true
             }
@@ -185,10 +320,12 @@ class StoryReadingFragment : Fragment() {
         voskModelViewModel.modelState.observe(viewLifecycleOwner) { state ->
             Log.d(TAG, "VoskModelViewModel state changed: $state")
             if (state == ModelState.READY && voskModelViewModel.voskModel != null) {
-                if (recognizer == null) { 
+                if (recognizer == null) {
                     try {
-                        voskModelViewModel.voskModel?.let { model ->
-                            recognizer = Recognizer(model, sampleRate.toFloat())
+                        voskModelViewModel.voskModel?.let {
+                            // val grammar = "[\"one two three four five six seven eight nine ten\", \"hello world\"]"
+                            // recognizer = Recognizer(it, sampleRate.toFloat(), grammar)
+                            recognizer = Recognizer(it, sampleRate.toFloat())
                             Log.i(TAG, "Vosk Recognizer initialized for StoryReadingFragment.")
                         } ?: run {
                             Log.e(TAG, "Vosk model is null when state is READY.")
@@ -196,10 +333,10 @@ class StoryReadingFragment : Fragment() {
                     } catch (e: Exception) {
                         Log.e(TAG, "Failed to initialize Vosk Recognizer", e)
                         Toast.makeText(requireContext(), "Speech recognizer init failed.", Toast.LENGTH_SHORT).show()
-                        recognizer = null 
+                        recognizer = null
                     }
                 }
-            } else { 
+            } else {
                 if (recognizer != null) {
                     recognizer?.close()
                     recognizer = null
@@ -216,7 +353,7 @@ class StoryReadingFragment : Fragment() {
         binding.buttonRecordStorySentence.isEnabled = modelIsReadyForUse
         binding.buttonRecordStorySentence.alpha = if (modelIsReadyForUse) 1.0f else 0.5f
         if (!modelIsReadyForUse && isRecording) {
-            stopRecordingInternal(false) 
+            stopRecordingInternal(false)
         }
     }
 
@@ -244,18 +381,20 @@ class StoryReadingFragment : Fragment() {
         }
         pcmFile?.delete()
         wavFileForPlayback?.delete()
-        binding.textViewSentenceScore.visibility = View.GONE // Keep this to hide the overall score view if it's still in XML
+        binding.textViewSentenceScore.visibility = View.GONE 
+        binding.textViewPartialTranscript.text = "Đang nghe..."
+        binding.textViewPartialTranscript.visibility = View.VISIBLE
+
+        clearAllSpansFromTextViews() // Reset all words to default color
+        currentHighlightedWordIndex = -1 // Reset highlight tracking
         
-        if (isAdded && _binding != null) {
-             binding.linearLayoutResultsContainer.removeAllViews()
-             currentStoryContent?.let { displayInitialStoryContent(it, binding.linearLayoutResultsContainer) }
-        }
         binding.buttonPlayUserSentenceRecording.isEnabled = false
         binding.buttonPlayUserSentenceRecording.alpha = 0.5f
+        recognizer?.reset() 
 
         try {
             val minBufferSize = AudioRecord.getMinBufferSize(sampleRate, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT)
-            bufferSize = max(minBufferSize, 4096)
+            bufferSize = max(minBufferSize, 4096) 
             audioRecord = AudioRecord(MediaRecorder.AudioSource.MIC, sampleRate, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT, bufferSize * 2)
             fileOutputStream = FileOutputStream(pcmFile)
             audioRecord?.startRecording()
@@ -264,90 +403,117 @@ class StoryReadingFragment : Fragment() {
             Toast.makeText(requireContext(), "Recording started...", Toast.LENGTH_SHORT).show()
             recordingThread = thread(start = true, name = "StoryAudioProducer") {
                 android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_AUDIO)
-                val shortBuffer = ShortArray(bufferSize)
+                val audioBuffer = ByteArray(bufferSize) 
                 while (isRecording) {
-                    val readResult = audioRecord?.read(shortBuffer, 0, shortBuffer.size) ?: 0
+                    val readResult = audioRecord?.read(audioBuffer, 0, audioBuffer.size) ?: 0
                     if (readResult > 0) {
-                        val byteArray = ByteArray(readResult * 2)
-                        for (i in 0 until readResult) {
-                            val v = shortBuffer[i].toInt()
-                            byteArray[i * 2] = (v and 0xFF).toByte()
-                            byteArray[i * 2 + 1] = ((v shr 8) and 0xFF).toByte()
+                        try {
+                            fileOutputStream?.write(audioBuffer, 0, readResult)
+                            if (recognizer?.acceptWaveForm(audioBuffer, readResult) == true) {
+                                val partialJson = recognizer?.partialResult
+                                try {
+                                    val jsonObject = JSONObject(partialJson)
+                                    val partialText = jsonObject.optString("partial", "")
+                                    activity?.runOnUiThread {
+                                        if (isAdded && _binding != null) {
+                                            binding.textViewPartialTranscript.text = partialText
+                                            applyTemporaryHighlights(partialText) 
+                                        }
+                                    }
+                                } catch (e: Exception) {
+                                    Log.e(TAG, "Error parsing partial JSON: $partialJson", e)
+                                }
+                            } 
+                        } catch (e: IOException) {
+                            Log.e(TAG, "Error writing to PCM or processing partial result", e)
+                            break 
                         }
-                        try { fileOutputStream?.write(byteArray) } catch (e: IOException) { break }
                     }
                 }
             }
         } catch (e: Exception) {
             Log.e(TAG, "Recording setup/start failed", e)
-            Toast.makeText(requireContext(), "Recording setup failed.", Toast.LENGTH_SHORT).show()
+            Toast.makeText(requireContext(), "Recording setup failed: ${e.message}", Toast.LENGTH_LONG).show()
             isRecording = false
             updateRecordButtonUI()
+            if(isAdded && _binding != null) {
+                binding.textViewPartialTranscript.text = ""
+                binding.textViewPartialTranscript.visibility = View.GONE
+            }
         }
     }
 
     private fun stopRecordingInternal(processAudio: Boolean) {
-        if (!isRecording && recordingThread == null) return
+        if (!isRecording && audioRecord == null) return 
         isRecording = false 
         updateRecordButtonUI()
         try { recordingThread?.join(500) } catch (e: InterruptedException) { Log.e(TAG, "Recording thread join interrupted", e) }
         recordingThread = null
+        
         audioRecord?.stopSafely()
         audioRecord?.releaseSafely()
         audioRecord = null
+        
         fileOutputStream?.flushSafely()
         fileOutputStream?.closeSafely()
         fileOutputStream = null
+        
+        activity?.runOnUiThread { 
+            if(isAdded && _binding != null) {
+                binding.textViewPartialTranscript.text = ""
+                binding.textViewPartialTranscript.visibility = View.GONE
+            }
+        }
+
         if (processAudio && pcmFile?.exists() == true && pcmFile!!.length() > 0) {
-            Toast.makeText(requireContext(), "Processing...", Toast.LENGTH_SHORT).show()
+            Toast.makeText(requireContext(), "Processing final result...", Toast.LENGTH_SHORT).show()
             startPostProcessingThread(pcmFile!!, targetSentenceForScoring)
         } else if (processAudio) {
             Toast.makeText(requireContext(), "Recording was empty or failed.", Toast.LENGTH_SHORT).show()
             binding.buttonPlayUserSentenceRecording.isEnabled = false
             binding.buttonPlayUserSentenceRecording.alpha = 0.5f
+            clearAllSpansFromTextViews() 
+        } else {
+            clearAllSpansFromTextViews() 
         }
     }
 
-    private fun startPostProcessingThread(currentPcmFile: File, currentTargetStory: String) {
-        val currentRecognizer = recognizer
+    private fun startPostProcessingThread(currentPcmFile: File, fullStoryText: String) {
+        val currentRecognizer = recognizer 
         if (currentRecognizer == null || voskModelViewModel.modelState.value != ModelState.READY) {
-            Toast.makeText(requireContext(), "Speech engine not ready for processing.", Toast.LENGTH_SHORT).show()
+            Toast.makeText(requireContext(), "Speech engine not ready for final processing.", Toast.LENGTH_SHORT).show()
             return
         }
-        thread(start = true, name = "StoryPostProcessThread") {
+        thread(start = true, name = "StoryFinalProcessThread") {
             var voskJsonResult: String? = null
             var wavCreatedSuccessfully = false
             try {
-                FileInputStream(currentPcmFile).use { fis ->
-                    val buffer = ByteArray(4096)
-                    var bytesRead: Int 
-                    currentRecognizer.reset() 
-                    while (fis.read(buffer).also { bytesRead = it } > 0) {
-                        currentRecognizer.acceptWaveForm(buffer, bytesRead)
+                voskJsonResult = currentRecognizer.finalResult
+
+                wavFileForPlayback?.let {
+                    if (currentPcmFile.exists() && currentPcmFile.length() > 0) {
+                        try {
+                            FileOutputStream(it).use { fosWav ->
+                                fosWav.write(createWavHeader(currentPcmFile.length().toInt(), sampleRate, 1, 16))
+                                FileInputStream(currentPcmFile).use { fisPcmForWav -> fisPcmForWav.copyTo(fosWav) }
+                            }
+                            wavCreatedSuccessfully = it.exists() && it.length() > 44
+                        } catch (e: Exception) { Log.e(TAG, "Error creating WAV file from PCM", e) }
+                    } else {
+                         Log.w(TAG, "PCM file for WAV creation is empty or does not exist.")
                     }
                 }
-                voskJsonResult = currentRecognizer.finalResult
-                wavFileForPlayback?.let {
-                    try {
-                        FileOutputStream(it).use { fosWav ->
-                            fosWav.write(createWavHeader(currentPcmFile.length().toInt(), sampleRate, 1, 16))
-                            FileInputStream(currentPcmFile).use { fisPcmForWav -> fisPcmForWav.copyTo(fosWav) }
-                        }
-                        wavCreatedSuccessfully = it.exists() && it.length() > 44
-                    } catch (e: Exception) { Log.e(TAG, "Error creating WAV file", e) }
-                }
-            } catch (e: Exception) { Log.e(TAG, "Error in Vosk processing or WAV creation", e) }
+            } catch (e: Exception) { Log.e(TAG, "Error in Vosk final processing or WAV creation", e) }
 
             activity?.runOnUiThread {
                 if (!isAdded || _binding == null) return@runOnUiThread
+                 clearAllSpansFromTextViews() // Clear temporary highlights before applying final colors
+
                 if (voskJsonResult != null) {
-                    val scoringResult = PronunciationScorer.scoreSentenceQuick(voskJsonResult, currentTargetStory)
-                    // binding.textViewSentenceScore.text = "Overall Score: ${scoringResult.overallSentenceScore}" // Removed
-                    // binding.textViewSentenceScore.visibility = View.VISIBLE // Removed
-                    renderPerSentenceFromOverall(currentTargetStory, scoringResult.evaluations, binding.linearLayoutResultsContainer)
+                    val scoringResult = PronunciationScorer.scoreSentenceQuick(voskJsonResult, fullStoryText)
+                    renderFinalWordColors(scoringResult.evaluations) 
                 } else {
-                     Toast.makeText(requireContext(), "Could not get speech result.", Toast.LENGTH_SHORT).show()
-                     currentStoryContent?.let { displayInitialStoryContent(it, binding.linearLayoutResultsContainer) }
+                     Toast.makeText(requireContext(), "Could not get final speech result.", Toast.LENGTH_SHORT).show()
                 }
                 binding.buttonPlayUserSentenceRecording.isEnabled = wavCreatedSuccessfully
                 binding.buttonPlayUserSentenceRecording.alpha = if (wavCreatedSuccessfully) 1.0f else 0.5f
@@ -355,6 +521,39 @@ class StoryReadingFragment : Fragment() {
         }
     }
     
+    private fun renderFinalWordColors(evaluations: List<PronunciationScorer.SentenceWordEvaluation>) {
+        if (!isAdded || _binding == null ) return
+
+        var evalIdx = 0
+        allWordInfosInStory.forEach { storyWordInfo ->
+            var chosenScore = 0 
+            var matched = false
+            // Attempt to match storyWordInfo with an evaluation word
+            if (evalIdx < evaluations.size) {
+                val evalWord = evaluations[evalIdx]
+                if (storyWordInfo.normalizedText == normalizeToken(evalWord.targetWord)) {
+                    chosenScore = evalWord.score
+                    evalIdx++
+                    matched = true
+                } else {
+                    // Simple lookahead for insertions/deletions if texts don't match
+                    if (evalIdx + 1 < evaluations.size) {
+                        val nextEvalWord = evaluations[evalIdx + 1]
+                        if (storyWordInfo.normalizedText == normalizeToken(nextEvalWord.targetWord)) {
+                            // Current evalWord might be an insertion, skip it and use next one
+                            chosenScore = nextEvalWord.score
+                            evalIdx += 2
+                            matched = true
+                        }
+                    }
+                }
+            }
+            // If not matched, it remains score 0 (incorrect)
+            val colorToApply = if (chosenScore > 0) colorCorrectWord else colorIncorrectWord
+            updateWordSpan(storyWordInfo, colorToApply)
+        }
+    }
+
     private fun levenshtein(s1: String, s2: String): Int {
         val m = s1.length
         val n = s2.length
@@ -363,7 +562,7 @@ class StoryReadingFragment : Fragment() {
         for (j in 0..n) dp[0][j] = j
         for (i in 1..m) {
             for (j in 1..n) {
-                val cost = if (s1[i - 1] == s2[j - 1]) 0 else 1
+                val cost = if (s1[i - 1].equals(s2[j - 1], ignoreCase = true)) 0 else 1
                 dp[i][j] = minOf(dp[i - 1][j] + 1, dp[i][j - 1] + 1, dp[i - 1][j - 1] + cost)
             }
         }
@@ -372,103 +571,6 @@ class StoryReadingFragment : Fragment() {
 
     private fun normalizeToken(s: String): String = 
         s.lowercase().replace(Regex("[^a-z0-9']"), "")
-
-    private fun findNextTokenPos(sentence: String, tokenToSearch: String, startIndex: Int): Int {
-        if (tokenToSearch.isEmpty()) return -1
-        val sentenceLower = sentence.lowercase()
-        val tokenLower = tokenToSearch.lowercase()
-        var idx = sentenceLower.indexOf(tokenLower, startIndex)
-        while (idx >= 0) {
-            val leftOk = idx == 0 || !sentenceLower[idx - 1].isLetterOrDigit()
-            val rightPos = idx + tokenLower.length
-            val rightOk = rightPos >= sentenceLower.length || !sentenceLower[rightPos].isLetterOrDigit()
-            if (leftOk && rightOk) return idx
-            idx = sentenceLower.indexOf(tokenLower, idx + 1)
-        }
-        return -1
-    }
-
-    private fun renderPerSentenceFromOverall(
-        storyText: String,
-        overallEvaluations: List<PronunciationScorer.SentenceWordEvaluation>,
-        container: LinearLayout
-    ) {
-        if (!isAdded || _binding == null || !isAdded()) return // Added isAdded() check for safety
-        container.removeAllViews()
-        val sentences = storyText.split(Regex("(?<=[.!?;:])\\s+")).filter { it.isNotBlank() }
-        var evalIdx = 0 
-
-        for (sentenceText in sentences) {
-            val spannable = SpannableString(sentenceText)
-            val sentenceDisplayWords = sentenceText.split(Regex("\\s+")).filter { it.isNotBlank() } 
-            
-            var currentWordPosInSentence = 0
-
-            for (displayWord in sentenceDisplayWords) {
-                val normalizedDisplayWord = normalizeToken(displayWord)
-                if (normalizedDisplayWord.isEmpty()) continue
-
-                val windowSize = 10 
-                var bestMatchEvalIndex = -1
-                var bestLevDistance = Int.MAX_VALUE
-                
-                val searchEndIndex = min(evalIdx + windowSize, overallEvaluations.size)
-
-                for (k in evalIdx until searchEndIndex) {
-                    val evalWord = overallEvaluations[k]
-                    val normalizedEvalWord = normalizeToken(evalWord.targetWord)
-                    if (normalizedEvalWord.isEmpty()) continue
-
-                    val distance = levenshtein(normalizedDisplayWord, normalizedEvalWord)
-                    if (distance < bestLevDistance) {
-                        bestLevDistance = distance
-                        bestMatchEvalIndex = k
-                    }
-                    if (bestLevDistance == 0) break 
-                }
-
-                var chosenScore = 0
-                val maxAcceptableDistanceRatio = 0.6 
-
-                if (bestMatchEvalIndex != -1) {
-                    val matchedEvalWord = overallEvaluations[bestMatchEvalIndex]
-                    val normalizedMatchedEvalWord = normalizeToken(matchedEvalWord.targetWord)
-                    val currentDistanceRatio = if (max(normalizedDisplayWord.length, normalizedMatchedEvalWord.length) == 0) 0.0 
-                                             else bestLevDistance.toDouble() / max(normalizedDisplayWord.length, normalizedMatchedEvalWord.length)
-
-                    if (currentDistanceRatio <= maxAcceptableDistanceRatio) {
-                        chosenScore = matchedEvalWord.score
-                        evalIdx = bestMatchEvalIndex + 1 
-                    } 
-                } 
-
-                val tokenActualPos = findNextTokenPos(sentenceText, displayWord, currentWordPosInSentence)
-                if (tokenActualPos >= 0) {
-                    val colorRes = if (chosenScore > 0) R.color.blue_500 else R.color.red_500
-                    val colorInt = ContextCompat.getColor(requireContext(), colorRes)
-                    try {
-                        spannable.setSpan(
-                            ForegroundColorSpan(colorInt),
-                            tokenActualPos,
-                            (tokenActualPos + displayWord.length).coerceAtMost(sentenceText.length),
-                            Spannable.SPAN_EXCLUSIVE_EXCLUSIVE
-                        )
-                    } catch (e: Exception) {
-                        Log.e(TAG, "Error applying span to '$displayWord' in '$sentenceText'", e)
-                    }
-                    currentWordPosInSentence = tokenActualPos + displayWord.length
-                }
-            }
-            
-            val sentenceTv = TextView(requireContext()).apply {
-                text = spannable
-                setTextSize(TypedValue.COMPLEX_UNIT_SP, 18f)
-                setPadding(4, 8, 4, 8) 
-                setLineSpacing(0f, 1.2f)
-            }
-            container.addView(sentenceTv)
-        }
-    }
 
     private fun playUserRecording() {
         if (wavFileForPlayback?.exists() != true || wavFileForPlayback!!.length() == 0L) {
@@ -528,8 +630,8 @@ class StoryReadingFragment : Fragment() {
         return header
     }
 
-    private fun AudioRecord.stopSafely() { try { if (recordingState == AudioRecord.RECORDSTATE_RECORDING) stop() } catch (e: IllegalStateException) { Log.e(TAG, "AudioRecord.stop() failed safely", e) } }
-    private fun AudioRecord.releaseSafely() { try { release() } catch (e: Exception) { Log.e(TAG, "AudioRecord.release() failed safely", e) } }
+    private fun AudioRecord.stopSafely() { try { if (state == AudioRecord.STATE_INITIALIZED && recordingState == AudioRecord.RECORDSTATE_RECORDING) stop() } catch (e: IllegalStateException) { Log.e(TAG, "AudioRecord.stop() failed safely", e) } }
+    private fun AudioRecord.releaseSafely() { try { if (state == AudioRecord.STATE_INITIALIZED) release() } catch (e: Exception) { Log.e(TAG, "AudioRecord.release() failed safely", e) } }
     private fun FileOutputStream.flushSafely() { try { flush() } catch (e: IOException) { Log.e(TAG, "FileOutputStream.flush() failed safely", e) } }
     private fun FileOutputStream.closeSafely() { try { close() } catch (e: IOException) { Log.e(TAG, "FileOutputStream.close() failed safely", e) } }
 
