@@ -50,9 +50,8 @@
         android:layout_marginTop="8dp"
         android:paddingStart="16dp"
         android:paddingEnd="16dp"
-        android:layout_marginBottom="8dp" 
         app:layout_constraintTop_toBottomOf="@id/textViewSentenceScore"
-        app:layout_constraintBottom_toTopOf="@+id/buttonRecordStorySentence" 
+        app:layout_constraintBottom_toBottomOf="parent" 
         app:layout_constraintStart_toStartOf="parent"
         app:layout_constraintEnd_toEndOf="parent"
         android:fillViewport="true">
@@ -61,7 +60,8 @@
             android:id="@+id/linearLayoutResultsContainer"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:orientation="vertical" />
+            android:orientation="vertical"
+            android:paddingBottom="80dp"/>
 
     </ScrollView>
 
@@ -71,7 +71,7 @@
         android:layout_height="wrap_content"
         android:layout_marginStart="24dp"
         android:layout_marginEnd="24dp"
-        android:layout_marginTop="8dp" 
+        android:layout_marginBottom="8dp"
         android:gravity="center_horizontal"
         android:textAppearance="?android:attr/textAppearanceMedium"
         android:textColor="@color/gray_500"
@@ -79,46 +79,43 @@
         android:maxLines="3"
         android:ellipsize="end"
         android:visibility="gone" 
-        app:layout_constraintBottom_toTopOf="@id/buttonRecordStorySentence" 
+        app:layout_constraintBottom_toTopOf="@+id/buttonRecordStorySentence" 
         app:layout_constraintStart_toStartOf="parent"
         app:layout_constraintEnd_toEndOf="parent"
         tools:text="Bạn đang nói..."/>
 
-    <!-- Guideline để giúp căn giữa 2 nút -->
-    <androidx.constraintlayout.widget.Guideline
-        android:id="@+id/guideline_vertical_center_controls"
+    <com.google.android.material.floatingactionbutton.FloatingActionButton
+        android:id="@+id/buttonPlayUserSentenceRecording"
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
-        android:orientation="vertical"
-        app:layout_constraintGuide_percent="0.5" />
-
-    <ImageButton
-        android:id="@+id/buttonRecordStorySentence"
-        android:layout_width="72dp"
-        android:layout_height="72dp"
-        android:background="@drawable/bg_record_button_selector"
-        android:src="@drawable/ic_mic"
-        android:scaleType="centerInside"
-        android:padding="16dp"
-        android:contentDescription="Record story sentence"
-        app:layout_constraintBottom_toBottomOf="parent"
-        app:layout_constraintEnd_toStartOf="@+id/guideline_vertical_center_controls"
+        android:layout_marginStart="16dp"
         android:layout_marginBottom="16dp"
-        android:layout_marginEnd="8dp"/>
-
-    <ImageButton
-        android:id="@+id/buttonPlayUserSentenceRecording"
-        android:layout_width="56dp"
-        android:layout_height="56dp"
-        android:background="@drawable/bg_play_button_circle"
-        android:src="@drawable/ic_speaker_wave" 
-        android:contentDescription="Play user recording"
-        android:padding="12dp" 
+        android:src="@drawable/ic_speaker_wave"
+        app:backgroundTint="@android:color/white"
+        app:tint="@color/gray_500"
+        app:fabSize="normal"
         android:enabled="false"
         android:alpha="0.5"
+        android:contentDescription="Play user recording"
+        app:elevation="6dp"
+        app:pressedTranslationZ="12dp"
         app:layout_constraintBottom_toBottomOf="parent"
-        app:layout_constraintStart_toEndOf="@+id/guideline_vertical_center_controls"
+        app:layout_constraintStart_toStartOf="parent" />
+
+    <com.google.android.material.floatingactionbutton.FloatingActionButton
+        android:id="@+id/buttonRecordStorySentence"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_marginEnd="16dp"
         android:layout_marginBottom="16dp"
-        android:layout_marginStart="8dp"/>
+        android:src="@drawable/ic_mic"
+        app:backgroundTint="@android:color/white"
+        app:tint="@color/gray_500"
+        app:fabSize="normal" 
+        android:contentDescription="Record story sentence"
+        app:elevation="6dp"
+        app:pressedTranslationZ="12dp"
+        app:layout_constraintBottom_toBottomOf="parent"
+        app:layout_constraintEnd_toEndOf="parent" />
 
 </androidx.constraintlayout.widget.ConstraintLayout>

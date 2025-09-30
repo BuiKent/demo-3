@@ -3,6 +3,7 @@ package com.example.realtalkenglishwithAI.fragment
 import android.Manifest
 import android.content.Context
 import android.content.pm.PackageManager
+import android.content.res.ColorStateList
 import android.graphics.Color
 import android.graphics.Typeface
 import android.media.AudioAttributes
@@ -34,7 +35,6 @@ import com.example.realtalkenglishwithAI.utils.PronunciationScorer
 import com.example.realtalkenglishwithAI.viewmodel.ModelState
 import com.example.realtalkenglishwithAI.viewmodel.VoskModelViewModel
 import org.json.JSONObject
-// import org.vosk.Model // Model is not directly used here, only through ViewModel
 import org.vosk.Recognizer
 import java.io.File
 import java.io.FileInputStream
@@ -68,10 +68,18 @@ class StoryReadingFragment : Fragment() {
     private var currentAudioTrack: AudioTrack? = null
     private var playbackThread: Thread? = null
 
-    private var colorDefaultText: Int = Color.BLACK
-    private var colorTemporaryHighlight: Int = Color.LTGRAY
-    private var colorCorrectWord: Int = Color.GREEN
-    private var colorIncorrectWord: Int = Color.RED
+    // Colors for text spans
+    private var colorDefaultText: Int = Color.BLACK // Fallback
+    private var colorTemporaryHighlight: Int = Color.LTGRAY // Fallback
+    private var colorCorrectWord: Int = Color.GREEN // Fallback
+    private var colorIncorrectWord: Int = Color.RED // Fallback
+
+    // Colors for FABs - to be initialized in onViewCreated or onCreate
+    private var fabWhiteColor: Int = Color.WHITE
+    private var fabGrayColor: Int = Color.GRAY
+    private var fabBlackColor: Int = Color.BLACK
+    private var fabRedColor: Int = Color.RED
+
 
     private data class WordInfo(
         val originalText: String,
@@ -102,7 +110,6 @@ class StoryReadingFragment : Fragment() {
         var defaultTitle = "Test Scroll Story"
         var defaultContent = "The old house stood on a hill overlooking the village. It had been empty for years, and the locals whispered stories about strange noises and flickering lights. One night, a group of curious teenagers decided to explore it. Armed with flashlights, they crept through the creaking front door. Cobwebs hung like ancient curtains, and dust lay thick on every surface. A grand staircase dominated the hallway, its wooden steps groaning under their weight. As they ventured deeper, a sudden gust of wind slammed a distant door shut, making them jump. A faint melody, like a forgotten lullaby, seemed to drift from an upstairs room. Heartbeats quickened, and nervous glances were exchanged. Was it just the wind, or was there truly something else within those decaying walls? They cautiously ascended the stairs, drawn by an irresistible curiosity. The air grew colder with each step. Reaching the landing, they noticed a single door slightly ajar at the end of the corridor. Light spilled from the crack, pulsating softly. Taking a deep breath, the bravest of the group pushed it open. This addition should make the text long enough to properly test the scrolling feature and ensure the control buttons remain fixed at the bottom of the screen. Let's add a few more sentences to be absolutely sure. The room beyond was surprisingly ordinary, albeit dusty. An old rocking chair sat in one corner, gently swaying as if recently vacated. A small, leather-bound diary lay open on a nearby table, its pages filled with elegant, faded script. The teenagers gathered around, their earlier fear now replaced by intrigue. What secrets did this forgotten place hold?"
 
-        // Allow arguments to override the default test content if provided
         arguments?.let {
             currentStoryContent = it.getString(ARG_STORY_CONTENT, defaultContent)
             currentStoryTitle = it.getString(ARG_STORY_TITLE, defaultTitle)
@@ -117,19 +124,18 @@ class StoryReadingFragment : Fragment() {
 
         val pcmPath = "${requireContext().externalCacheDir?.absolutePath}/story_sentence_audio.pcm"
         pcmFile = File(pcmPath)
-
         setHasOptionsMenu(true)
 
-        if (isAdded) {
-            colorDefaultText = ContextCompat.getColor(requireContext(), android.R.color.black)
-            colorTemporaryHighlight = ContextCompat.getColor(requireContext(), R.color.gray_500)
-            colorCorrectWord = ContextCompat.getColor(requireContext(), R.color.blue_500)
-            colorIncorrectWord = ContextCompat.getColor(requireContext(), R.color.red_500)
-        } else {
-            colorDefaultText = Color.BLACK
-            colorTemporaryHighlight = Color.LTGRAY
-            colorCorrectWord = Color.GREEN
-            colorIncorrectWord = Color.RED
+        context?.let { ctx ->
+            colorDefaultText = ContextCompat.getColor(ctx, android.R.color.black)
+            colorTemporaryHighlight = ContextCompat.getColor(ctx, R.color.gray_500)
+            colorCorrectWord = ContextCompat.getColor(ctx, R.color.blue_500)
+            colorIncorrectWord = ContextCompat.getColor(ctx, R.color.red_500)
+
+            fabWhiteColor = ContextCompat.getColor(ctx, android.R.color.white)
+            fabGrayColor = ContextCompat.getColor(ctx, R.color.gray_500)
+            fabBlackColor = ContextCompat.getColor(ctx, android.R.color.black)
+            fabRedColor = ContextCompat.getColor(ctx, R.color.red_500)
         }
     }
 
@@ -138,11 +144,16 @@ class StoryReadingFragment : Fragment() {
         savedInstanceState: Bundle?
     ): View {
         _binding = FragmentStoryReadingBinding.inflate(inflater, container, false)
-        if (colorDefaultText == Color.BLACK && context != null) { 
+        if (context != null && colorDefaultText == Color.BLACK) { 
             colorDefaultText = ContextCompat.getColor(requireContext(), android.R.color.black)
             colorTemporaryHighlight = ContextCompat.getColor(requireContext(), R.color.gray_500)
             colorCorrectWord = ContextCompat.getColor(requireContext(), R.color.blue_500)
             colorIncorrectWord = ContextCompat.getColor(requireContext(), R.color.red_500)
+
+            fabWhiteColor = ContextCompat.getColor(requireContext(), android.R.color.white)
+            fabGrayColor = ContextCompat.getColor(requireContext(), R.color.gray_500)
+            fabBlackColor = ContextCompat.getColor(requireContext(), android.R.color.black)
+            fabRedColor = ContextCompat.getColor(requireContext(), R.color.red_500)
         }
         return binding.root
     }
@@ -159,6 +170,45 @@ class StoryReadingFragment : Fragment() {
         observeVoskModelStatus()
         if (isAdded && _binding != null) {
              binding.textViewPartialTranscript.visibility = View.GONE
+        }
+        val modelReady = voskModelViewModel.modelState.value == ModelState.READY && voskModelViewModel.voskModel != null
+        val canPlayPcm = pcmFile?.exists() == true && pcmFile!!.length() > 0L
+        updateFabStates(modelReady, canPlayPcm)
+    }
+
+    private fun updateFabStates(modelReady: Boolean, canPlayPcm: Boolean) {
+        if (!isAdded || _binding == null) return
+
+        binding.buttonRecordStorySentence.apply {
+            setImageResource(R.drawable.ic_mic) // Always ensure mic icon
+            if (isRecording) {
+                backgroundTintList = ColorStateList.valueOf(fabRedColor)
+                imageTintList = ColorStateList.valueOf(fabWhiteColor)
+                isEnabled = true
+                alpha = 1.0f
+            } else {
+                isEnabled = modelReady
+                alpha = if (modelReady) 1.0f else 0.5f
+                if (modelReady) {
+                    backgroundTintList = ColorStateList.valueOf(fabWhiteColor)
+                    imageTintList = ColorStateList.valueOf(fabBlackColor)
+                } else {
+                    backgroundTintList = ColorStateList.valueOf(fabWhiteColor)
+                    imageTintList = ColorStateList.valueOf(fabGrayColor)
+                }
+            }
+        }
+
+        binding.buttonPlayUserSentenceRecording.apply {
+            isEnabled = !isRecording && canPlayPcm
+            alpha = if (isEnabled) 1.0f else 0.5f
+            if (isEnabled) {
+                backgroundTintList = ColorStateList.valueOf(fabWhiteColor)
+                imageTintList = ColorStateList.valueOf(fabBlackColor)
+            } else {
+                backgroundTintList = ColorStateList.valueOf(fabWhiteColor)
+                imageTintList = ColorStateList.valueOf(fabGrayColor)
+            }
         }
     }
 
@@ -348,24 +398,21 @@ class StoryReadingFragment : Fragment() {
         if (!isAdded) return
         voskModelViewModel.modelState.observe(viewLifecycleOwner) { state ->
             Log.d(TAG, "VoskModelViewModel state changed: $state")
-            updateUIForVoskModelState(state)
-        }
-    }
-
-    private fun updateUIForVoskModelState(state: ModelState) {
-        if (!isAdded || _binding == null) return
-        val modelIsReadyForUse = state == ModelState.READY && voskModelViewModel.voskModel != null
-        binding.buttonRecordStorySentence.isEnabled = modelIsReadyForUse
-        binding.buttonRecordStorySentence.alpha = if (modelIsReadyForUse) 1.0f else 0.5f
-        if (!modelIsReadyForUse && isRecording) {
-            stopRecordingInternal(false)
+            val modelIsReady = state == ModelState.READY && voskModelViewModel.voskModel != null
+            val canPlay = pcmFile?.exists() == true && pcmFile!!.length() > 0L
+            updateFabStates(modelIsReady, canPlay)
+            
+            if (!modelIsReady && isRecording) {
+                stopRecordingInternal(false) // Stop recording if model becomes unavailable
+            }
         }
     }
 
     private fun handleRecordAction() {
         if (!isAdded || _binding == null) return
-        if (voskModelViewModel.modelState.value != ModelState.READY || voskModelViewModel.voskModel == null) {
-            Toast.makeText(requireContext(), "Speech engine not ready. Please wait or check model.", Toast.LENGTH_SHORT).show()
+        val modelReady = voskModelViewModel.modelState.value == ModelState.READY && voskModelViewModel.voskModel != null
+        if (!modelReady) {
+            Toast.makeText(requireContext(), "Speech engine not ready. Please wait.", Toast.LENGTH_SHORT).show()
             return
         }
         if (ContextCompat.checkSelfPermission(requireContext(), Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) {
@@ -389,26 +436,22 @@ class StoryReadingFragment : Fragment() {
 
         val voskModelInstance = voskModelViewModel.voskModel
         if (voskModelInstance == null) {
-            Toast.makeText(requireContext(), "Speech model not available for producer.", Toast.LENGTH_SHORT).show()
-            Log.e(TAG, "VoskModel is null when trying to start recording producer.")
+            Toast.makeText(requireContext(), "Speech model not available.", Toast.LENGTH_SHORT).show()
+            Log.e(TAG, "VoskModel is null when trying to start recording.")
             return
         }
 
         pcmFile?.delete()
         binding.textViewSentenceScore.visibility = View.GONE
-
         clearAllSpansFromTextViews()
         currentHighlightedWordIndex = -1
-
-        binding.buttonPlayUserSentenceRecording.isEnabled = false
-        binding.buttonPlayUserSentenceRecording.alpha = 0.5f
 
         try {
             val minBufferSize = AudioRecord.getMinBufferSize(sampleRate, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT)
             bufferSizeForRecording = max(minBufferSize, 4096)
             
             if (ContextCompat.checkSelfPermission(requireContext(), Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
-                 Toast.makeText(requireContext(), "Audio permission missing for AudioRecord.", Toast.LENGTH_SHORT).show()
+                 Toast.makeText(requireContext(), "Audio permission missing.", Toast.LENGTH_SHORT).show()
                  return
             }
             audioRecord = AudioRecord(MediaRecorder.AudioSource.MIC, sampleRate, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT, bufferSizeForRecording * 2)
@@ -423,8 +466,8 @@ class StoryReadingFragment : Fragment() {
             fileOutputStream = FileOutputStream(pcmFile)
             audioRecord?.startRecording()
             isRecording = true
-            updateRecordButtonUI()
             Toast.makeText(requireContext(), "Recording started...", Toast.LENGTH_SHORT).show()
+            updateFabStates(true, false) // Model is ready, not playing PCM
 
             recordingThread = thread(start = true, name = "StoryAudioProducer") {
                 android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_AUDIO)
@@ -433,166 +476,92 @@ class StoryReadingFragment : Fragment() {
 
                 try {
                     localProducerRecognizer = Recognizer(voskModelInstance, sampleRate.toFloat())
-                    Log.i(TAG, "Producer thread created its own Recognizer.")
-
                     while (isRecording) {
                         val currentAudioRecord = audioRecord
-                        if (currentAudioRecord == null || !isRecording) {
-                            Log.d(TAG, "Producer: AudioRecord null or no longer recording, exiting loop.")
-                            break
-                        }
-
-                        val readResult = try {
-                            currentAudioRecord.read(audioBuffer, 0, audioBuffer.size)
-                        } catch (e: Exception) {
-                            Log.e(TAG, "Producer: AudioRecord.read failed, exiting loop.", e)
-                            activity?.runOnUiThread {
-                                if (isAdded) Toast.makeText(requireContext(), "Audio read error.", Toast.LENGTH_SHORT).show()
-                            }
-                            break
-                        }
-
+                        if (currentAudioRecord == null || !isRecording) break
+                        val readResult = try { currentAudioRecord.read(audioBuffer, 0, audioBuffer.size) } catch (e: Exception) { Log.e(TAG, "Producer: AudioRecord.read failed", e); break }
                         if (readResult > 0) {
+                            try { fileOutputStream?.write(audioBuffer, 0, readResult) } catch (e: IOException) { Log.e(TAG, "Producer: File write failed", e); break }
                             try {
-                                fileOutputStream?.write(audioBuffer, 0, readResult)
-                            } catch (e: IOException) {
-                                Log.e(TAG, "Producer: File write failed, exiting loop.", e)
-                                activity?.runOnUiThread {
-                                     if (isAdded) Toast.makeText(requireContext(), "File write error.", Toast.LENGTH_SHORT).show()
-                                }
-                                break
-                            }
-
-                            try {
-                                val accepted = localProducerRecognizer.acceptWaveForm(audioBuffer, readResult)
-                                if (accepted) {
+                                if (localProducerRecognizer.acceptWaveForm(audioBuffer, readResult)) {
                                     val partialJson = localProducerRecognizer.partialResult
                                     val partialText = JSONObject(partialJson).optString("partial", "")
-                                    activity?.runOnUiThread {
-                                        if (isAdded && _binding != null && isRecording) {
-                                            applyTemporaryHighlights(partialText) 
-                                        }
-                                    }
+                                    activity?.runOnUiThread { if (isAdded && _binding != null && isRecording) { applyTemporaryHighlights(partialText) } }
                                 }
-                            } catch (e: Exception) {
-                                Log.e(TAG, "Producer: Recognizer.acceptWaveForm or partialResult failed (caught), exiting loop: ${e.message}", e)
-                                activity?.runOnUiThread {
-                                    if (isAdded) Toast.makeText(requireContext(), "Speech processing error.", Toast.LENGTH_SHORT).show()
-                                }
-                                break
-                            }
-                        } else if (readResult < 0) {
-                            Log.e(TAG, "Producer: AudioRecord read error code: $readResult, exiting loop.")
-                             activity?.runOnUiThread {
-                                if (isAdded) Toast.makeText(requireContext(), "Audio read error code: $readResult", Toast.LENGTH_SHORT).show()
-                            }
-                            break
-                        }
+                            } catch (e: Exception) { Log.e(TAG, "Producer: Recognizer.acceptWaveForm/partialResult failed", e); break }
+                        } else if (readResult < 0) { Log.e(TAG, "Producer: AudioRecord read error: $readResult"); break }
                     }
                 } catch (e: Exception) {
-                    Log.e(TAG, "Producer: Error during recognizer creation or outer producer loop: ${e.message}", e)
-                    activity?.runOnUiThread {
-                        if (isAdded) Toast.makeText(requireContext(), "Recorder init error.", Toast.LENGTH_SHORT).show()
-                    }
+                    Log.e(TAG, "Producer: Error in producer loop or recognizer init", e)
                 } finally {
-                    Log.d(TAG, "Producer thread: Entering finally block.")
-                    localProducerRecognizer?.let {
-                        try {
-                            it.close()
-                            Log.i(TAG, "Producer thread successfully closed its local Recognizer.")
-                        } catch (e: Exception) {
-                            Log.e(TAG, "Producer thread: Failed to close its local Recognizer.", e)
-                        }
-                    }
-                    Log.d(TAG, "StoryAudioProducer thread finished execution.")
+                    localProducerRecognizer?.close()
+                    Log.d(TAG, "StoryAudioProducer thread finished.")
                 }
             }
         } catch (e: Exception) {
             Log.e(TAG, "Recording setup/start failed", e)
             Toast.makeText(requireContext(), "Recording setup failed: ${e.message}", Toast.LENGTH_LONG).show()
             isRecording = false
-            updateRecordButtonUI()
-            audioRecord?.release()
-            audioRecord = null
-            fileOutputStream?.closeSafely()
-            fileOutputStream = null
+            audioRecord?.release(); audioRecord = null
+            fileOutputStream?.closeSafely(); fileOutputStream = null
+            val modelRdy = voskModelViewModel.modelState.value == ModelState.READY && voskModelViewModel.voskModel != null
+            updateFabStates(modelRdy, false)
         }
     }
 
     private fun stopRecordingInternal(processAudio: Boolean) {
         if (!isRecording && audioRecord == null && recordingThread == null && fileOutputStream == null) {
             Log.d(TAG, "stopRecordingInternal called but already stopped or not started properly.")
-            if (isRecording) {
-                isRecording = false
-                updateRecordButtonUI()
-            }
+            if (isRecording) isRecording = false // Ensure isRecording is false
+            val modelRdy = voskModelViewModel.modelState.value == ModelState.READY && voskModelViewModel.voskModel != null
+            val canPly = pcmFile?.exists() == true && pcmFile!!.length() > 0L
+            updateFabStates(modelRdy, canPly)
             return
         }
-        Log.d(TAG, "stopRecordingInternal - Setting isRecording to false. ProcessAudio: $processAudio")
         isRecording = false
+        val modelReady = voskModelViewModel.modelState.value == ModelState.READY && voskModelViewModel.voskModel != null
+        updateFabStates(modelReady, pcmFile?.exists() == true && pcmFile!!.length() > 0L) // Update immediately after isRecording changes
 
-        updateRecordButtonUI()
-
-        Log.d(TAG, "stopRecordingInternal - Joining recordingThread.")
         try {
             recordingThread?.join(1500)
-            if (recordingThread?.isAlive == true) {
-                Log.w(TAG, "Recording thread did not finish in time, interrupting.")
-                recordingThread?.interrupt()
-                recordingThread?.join(500)
-            }
-        } catch (e: InterruptedException) {
-            Log.e(TAG, "Recording thread join interrupted", e)
-            Thread.currentThread().interrupt()
-        }
+            if (recordingThread?.isAlive == true) { recordingThread?.interrupt(); recordingThread?.join(500) }
+        } catch (e: InterruptedException) { Thread.currentThread().interrupt() }
         recordingThread = null
-        Log.d(TAG, "stopRecordingInternal - RecordingThread joined/handled.")
 
-        audioRecord?.let {
-            try {
-                if (it.recordingState == AudioRecord.RECORDSTATE_RECORDING) {
-                    it.stop()
-                }
-                it.release()
-            } catch (e: Exception) { Log.e(TAG, "AudioRecord stop/release failed", e) }
-        }
+        audioRecord?.let { try { if (it.recordingState == AudioRecord.RECORDSTATE_RECORDING) it.stop(); it.release() } catch (e: Exception) { Log.e(TAG, "AudioRecord stop/release failed", e) } }
         audioRecord = null
-        Log.d(TAG, "stopRecordingInternal - AudioRecord stopped and released.")
 
         fileOutputStream?.flushSafely()
         fileOutputStream?.closeSafely()
         fileOutputStream = null
-        Log.d(TAG, "stopRecordingInternal - FileOutputStream closed.")
 
         val pcmToProcess = pcmFile
-        if (processAudio && pcmToProcess?.exists() == true && pcmToProcess.length() > 0) {
+        val pcmFilePlayable = pcmToProcess?.exists() == true && pcmToProcess.length() > 0
+
+        if (processAudio && pcmFilePlayable) {
             if (isAdded) Toast.makeText(requireContext(), "Processing final result...", Toast.LENGTH_SHORT).show()
-            startPostProcessingThreadUsingNewRecognizer(pcmToProcess, targetSentenceForScoring)
-        } else if (processAudio) {
-            if (isAdded) Toast.makeText(requireContext(), "Recording was empty or invalid.", Toast.LENGTH_SHORT).show()
-            if(isAdded && _binding != null) {
-                binding.buttonPlayUserSentenceRecording.isEnabled = false
-                binding.buttonPlayUserSentenceRecording.alpha = 0.5f
+            startPostProcessingThreadUsingNewRecognizer(pcmToProcess!!, targetSentenceForScoring) // pcmToProcess is not null here
+        } else {
+            if (processAudio) { // but pcmFilePlayable was false
+                if (isAdded) Toast.makeText(requireContext(), "Recording was empty or invalid.", Toast.LENGTH_SHORT).show()
             }
             clearAllSpansFromTextViews()
-        } else {
-            Log.d(TAG, "stopRecordingInternal: Not processing audio.")
-            clearAllSpansFromTextViews()
+            activity?.runOnUiThread { 
+                 val modelRdyNow = voskModelViewModel.modelState.value == ModelState.READY && voskModelViewModel.voskModel != null
+                 updateFabStates(modelRdyNow, false)
+            }
         }
-        Log.d(TAG, "stopRecordingInternal - Finished.")
     }
 
     private fun startPostProcessingThreadUsingNewRecognizer(audioPcmFile: File, fullStoryText: String) {
         if (!isAdded) return
         val currentModel = voskModelViewModel.voskModel
         if (currentModel == null) {
-            Log.e(TAG, "VoskModel is null for post processing. Cannot proceed.")
+            Log.e(TAG, "VoskModel is null for post processing.")
             activity?.runOnUiThread {
                 if (isAdded) Toast.makeText(requireContext(), "Speech model unavailable for processing.", Toast.LENGTH_LONG).show()
-                if (_binding != null) {
-                    binding.buttonPlayUserSentenceRecording.isEnabled = false
-                    binding.buttonPlayUserSentenceRecording.alpha = 0.5f
-                }
+                val modelRdy = voskModelViewModel.modelState.value == ModelState.READY && voskModelViewModel.voskModel != null
+                updateFabStates(modelRdy, false)
                 clearAllSpansFromTextViews()
             }
             return
@@ -601,47 +570,28 @@ class StoryReadingFragment : Fragment() {
         thread(start = true, name = "StoryFinalProcessThread") {
             var voskJsonResult: String? = null
             var postProcessRecognizer: Recognizer? = null
-            val pcmFilePlayable = audioPcmFile.exists() && audioPcmFile.length() > 0
+            val currentPcmPlayable = audioPcmFile.exists() && audioPcmFile.length() > 0
 
             try {
                 postProcessRecognizer = Recognizer(currentModel, sampleRate.toFloat())
-                Log.i(TAG, "Post-process thread created its own Recognizer.")
-
                 FileInputStream(audioPcmFile).use { fis ->
                     val buffer = ByteArray(4096)
                     var bytesRead: Int
                     while (fis.read(buffer).also { bytesRead = it } > 0) {
-                        try {
-                           postProcessRecognizer.acceptWaveForm(buffer, bytesRead)
-                        } catch (e: Exception) {
-                            Log.e(TAG, "Error feeding chunk to post-process recognizer", e)
-                            break
-                        }
+                        if (!postProcessRecognizer.acceptWaveForm(buffer, bytesRead)) break 
                     }
                 }
-                
-                voskJsonResult = try {
-                    postProcessRecognizer.finalResult
-                } catch (e: Exception) {
-                    Log.e(TAG, "finalResult failed in post-process thread", e)
-                    null
-                }
+                voskJsonResult = postProcessRecognizer.finalResult
             } catch (e: Exception) {
                 Log.e(TAG, "Post-processing thread failed", e)
             } finally {
-                postProcessRecognizer?.let {
-                    try {
-                        it.close()
-                        Log.i(TAG, "Post-process thread successfully closed its Recognizer.")
-                    } catch (e: Exception) {
-                        Log.e(TAG, "Failed to close post-process recognizer", e)
-                    }
-                }
+                postProcessRecognizer?.close()
             }
 
             activity?.runOnUiThread {
                 if (!isAdded || _binding == null || !viewLifecycleOwner.lifecycle.currentState.isAtLeast(androidx.lifecycle.Lifecycle.State.STARTED)) return@runOnUiThread
                 clearAllSpansFromTextViews()
+                val modelRdy = voskModelViewModel.modelState.value == ModelState.READY && voskModelViewModel.voskModel != null
 
                 if (voskJsonResult != null) {
                     Log.d(TAG, "Vosk Final Result (Post-Processed): $voskJsonResult")
@@ -649,12 +599,8 @@ class StoryReadingFragment : Fragment() {
                     renderFinalWordColors(scoringResult.evaluations)
                 } else {
                      if (isAdded) Toast.makeText(requireContext(), "Could not get final speech result.", Toast.LENGTH_SHORT).show()
-                     Log.e(TAG, "Vosk Final Result was null after post-processing.")
                 }
-                if (isAdded && _binding != null) {
-                    binding.buttonPlayUserSentenceRecording.isEnabled = pcmFilePlayable
-                    binding.buttonPlayUserSentenceRecording.alpha = if (pcmFilePlayable) 1.0f else 0.5f
-                }
+                updateFabStates(modelRdy, currentPcmPlayable)
             }
         }
     }
@@ -699,7 +645,7 @@ class StoryReadingFragment : Fragment() {
 
     private fun playUserRecording() {
         if (!isAdded || _binding == null) return
-        stopCurrentAudioTrackPlayback()
+        stopCurrentAudioTrackPlayback() 
 
         val currentPcmFile = pcmFile
         if (currentPcmFile?.exists() != true || currentPcmFile.length() == 0L) {
@@ -711,123 +657,65 @@ class StoryReadingFragment : Fragment() {
 
     private fun stopCurrentAudioTrackPlayback(){
         playbackThread?.interrupt()
-        try {
-            playbackThread?.join(500)
-        } catch (e: InterruptedException) {
-            Thread.currentThread().interrupt()
-            Log.e(TAG, "Interrupted while joining playback thread")
-        }
+        try { playbackThread?.join(500) } catch (e: InterruptedException) { Thread.currentThread().interrupt() }
         playbackThread = null
 
         currentAudioTrack?.let {
-            try {
-                if (it.playState == AudioTrack.PLAYSTATE_PLAYING) {
-                    it.stop()
-                }
-                it.release()
-                Log.d(TAG, "AudioTrack stopped and released.")
-            } catch (e: IllegalStateException) {
-                Log.e(TAG, "Error stopping/releasing AudioTrack: ${e.message}")
-            }
+            try { if (it.playState == AudioTrack.PLAYSTATE_PLAYING) it.stop(); it.release() }
+            catch (e: IllegalStateException) { Log.e(TAG, "Error stopping/releasing AudioTrack: ${e.message}") }
         }
         currentAudioTrack = null
     }
 
     private fun playPcmWithAudioTrack(audioPcmFile: File) {
         if (!isAdded || _binding == null) return
-        val minBufferSize = AudioTrack.getMinBufferSize(
-            sampleRate,
-            AudioFormat.CHANNEL_OUT_MONO,
-            AudioFormat.ENCODING_PCM_16BIT
-        )
-        if (minBufferSize == AudioTrack.ERROR_BAD_VALUE || minBufferSize == AudioTrack.ERROR) {
-            Log.e(TAG, "AudioTrack.getMinBufferSize failed")
-            Toast.makeText(requireContext(), "AudioTrack parameter error.", Toast.LENGTH_SHORT).show()
-            return
-        }
+        val minBufferSize = AudioTrack.getMinBufferSize(sampleRate, AudioFormat.CHANNEL_OUT_MONO, AudioFormat.ENCODING_PCM_16BIT)
+        if (minBufferSize <= 0) { Log.e(TAG, "AudioTrack.getMinBufferSize failed: $minBufferSize"); return }
 
         try {
             currentAudioTrack = AudioTrack(
-                AudioAttributes.Builder()
-                    .setUsage(AudioAttributes.USAGE_MEDIA)
-                    .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
-                    .build(),
-                AudioFormat.Builder()
-                    .setEncoding(AudioFormat.ENCODING_PCM_16BIT)
-                    .setSampleRate(sampleRate)
-                    .setChannelMask(AudioFormat.CHANNEL_OUT_MONO)
-                    .build(),
-                minBufferSize,
-                AudioTrack.MODE_STREAM,
-                AudioManager.AUDIO_SESSION_ID_GENERATE
+                AudioAttributes.Builder().setUsage(AudioAttributes.USAGE_MEDIA).setContentType(AudioAttributes.CONTENT_TYPE_SPEECH).build(),
+                AudioFormat.Builder().setEncoding(AudioFormat.ENCODING_PCM_16BIT).setSampleRate(sampleRate).setChannelMask(AudioFormat.CHANNEL_OUT_MONO).build(),
+                minBufferSize, AudioTrack.MODE_STREAM, AudioManager.AUDIO_SESSION_ID_GENERATE
             )
-
-            if (currentAudioTrack?.state != AudioTrack.STATE_INITIALIZED) {
-                Log.e(TAG, "AudioTrack not initialized")
-                Toast.makeText(requireContext(), "AudioTrack initialization failed.", Toast.LENGTH_SHORT).show()
-                currentAudioTrack?.release()
-                currentAudioTrack = null
-                return
-            }
+            if (currentAudioTrack?.state != AudioTrack.STATE_INITIALIZED) { Log.e(TAG, "AudioTrack not initialized"); currentAudioTrack?.release(); currentAudioTrack = null; return }
 
             currentAudioTrack?.play()
             Toast.makeText(requireContext(), "Playing recording...", Toast.LENGTH_SHORT).show()
-            binding.buttonPlayUserSentenceRecording.isEnabled = false
+            
+            // Update FAB state for playback
+            val modelRdy = voskModelViewModel.modelState.value == ModelState.READY && voskModelViewModel.voskModel != null
+            // Temporarily disable play button during playback by setting canPlayPcm to false in updateFabStates
+            updateFabStates(modelRdy, false) // isRecording is false here
+            binding.buttonPlayUserSentenceRecording.alpha = 0.5f // Explicitly dim if needed
 
             playbackThread = thread(start = true, name = "PcmPlaybackThread") {
-                var bytesReadTotal = 0L
                 try {
                     FileInputStream(audioPcmFile).use { fis ->
                         val buffer = ByteArray(minBufferSize)
                         var bytesRead: Int
-                        while (fis.read(buffer).also { bytesRead = it } != -1 && (currentAudioTrack?.playState == AudioTrack.PLAYSTATE_PLAYING && !Thread.currentThread().isInterrupted)) {
-                            if (bytesRead > 0) {
-                                currentAudioTrack?.write(buffer, 0, bytesRead)
-                                bytesReadTotal += bytesRead
-                            }
+                        while (fis.read(buffer).also { bytesRead = it } != -1 && currentAudioTrack?.playState == AudioTrack.PLAYSTATE_PLAYING && !Thread.currentThread().isInterrupted) {
+                            if (bytesRead > 0) currentAudioTrack?.write(buffer, 0, bytesRead)
                         }
                     }
-                    if (Thread.currentThread().isInterrupted) {
-                        Log.d(TAG, "PCM playback interrupted. Bytes written: $bytesReadTotal")
-                    } else {
-                        Log.d(TAG, "PCM playback finished. Bytes written: $bytesReadTotal")
-                         activity?.runOnUiThread {
-                            if(isAdded) Toast.makeText(requireContext(), "Playback finished.", Toast.LENGTH_SHORT).show()
-                        }
-                    }
-                } catch (e: IOException) {
-                    Log.e(TAG, "IOException during PCM playback", e)
+                } catch (e: Exception) { Log.e(TAG, "Exception during PCM playback", e) }
+                finally {
                     activity?.runOnUiThread {
-                        if(isAdded) Toast.makeText(requireContext(), "Error playing recording.", Toast.LENGTH_SHORT).show()
-                    }
-                } catch (e: IllegalStateException) {
-                     Log.e(TAG, "IllegalStateException during PCM playback (AudioTrack might have been released)", e)
-                     activity?.runOnUiThread {
-                        if(isAdded) Toast.makeText(requireContext(), "Playback stopped abruptly.", Toast.LENGTH_SHORT).show()
-                    }
-                } finally {
-                    activity?.runOnUiThread {
-                        if(isAdded && _binding != null) { 
-                           binding.buttonPlayUserSentenceRecording.isEnabled = true
-                        }
-                         if (currentAudioTrack != null) { 
-                            stopCurrentAudioTrackPlayback()
-                         }
+                        if (isAdded) Toast.makeText(requireContext(), "Playback finished.", Toast.LENGTH_SHORT).show()
+                        stopCurrentAudioTrackPlayback() 
+                        val finalModelRdy = voskModelViewModel.modelState.value == ModelState.READY && voskModelViewModel.voskModel != null
+                        val canPly = pcmFile?.exists() == true && pcmFile!!.length() > 0L
+                        updateFabStates(finalModelRdy, canPly)
                     }
                 }
             }
         } catch (e: Exception) {
             Log.e(TAG, "AudioTrack setup failed", e)
-            Toast.makeText(requireContext(), "Audio playback setup failed: ${e.message}", Toast.LENGTH_LONG).show()
-            currentAudioTrack?.release()
-            currentAudioTrack = null
+            currentAudioTrack?.release(); currentAudioTrack = null
+             val modelRdy = voskModelViewModel.modelState.value == ModelState.READY && voskModelViewModel.voskModel != null
+             val canPly = pcmFile?.exists() == true && pcmFile!!.length() > 0L
+             updateFabStates(modelRdy, canPly)
         }
-    }
-
-    private fun updateRecordButtonUI() {
-        if (!isAdded || _binding == null) return
-        val icon = if (isRecording) R.drawable.ic_close else R.drawable.ic_mic
-        binding.buttonRecordStorySentence.setImageResource(icon)
     }
 
     private fun FileOutputStream.flushSafely() { try { flush() } catch (e: IOException) { Log.e(TAG, "FileOutputStream.flush() failed safely", e) } }
@@ -835,22 +723,11 @@ class StoryReadingFragment : Fragment() {
 
     override fun onDestroyView() {
         super.onDestroyView()
-        Log.d(TAG, "onDestroyView - Checking if recording is active.")
-
-        if (isRecording) {
-            Log.d(TAG, "onDestroyView - Recording active, calling stopRecordingInternal(false).")
-            stopRecordingInternal(false)
-        } else {
-            Log.d(TAG, "onDestroyView - Recording was not active.")
-            audioRecord?.let {
-                try { if (it.state == AudioRecord.STATE_INITIALIZED) it.release() } catch (e: Exception) { Log.e(TAG, "onDestroyView: Error releasing audioRecord leftover.", e)}
-                audioRecord = null
-            }
-            fileOutputStream?.closeSafely()
-            fileOutputStream = null
+        if (isRecording) stopRecordingInternal(false)
+        else {
+            audioRecord?.release(); audioRecord = null
+            fileOutputStream?.closeSafely(); fileOutputStream = null
         }
-
-        Log.d(TAG, "onDestroyView - Releasing AudioTrack (playback).")
         stopCurrentAudioTrackPlayback()
         _binding = null
         Log.d(TAG, "StoryReadingFragment onDestroyView completed.")
