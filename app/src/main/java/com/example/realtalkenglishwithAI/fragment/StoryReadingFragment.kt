@@ -122,7 +122,6 @@ class StoryReadingFragment : Fragment() {
                 setTextColor(Color.BLACK) 
                 setPadding(4, 8, 4, 8)
                 setLineSpacing(0f, 1.2f)
-
             }
             container.addView(tv)
         }
@@ -245,11 +244,10 @@ class StoryReadingFragment : Fragment() {
         }
         pcmFile?.delete()
         wavFileForPlayback?.delete()
-        binding.textViewSentenceScore.visibility = View.GONE
-        // Clear previous results before starting new recording
+        binding.textViewSentenceScore.visibility = View.GONE // Keep this to hide the overall score view if it's still in XML
+        
         if (isAdded && _binding != null) {
              binding.linearLayoutResultsContainer.removeAllViews()
-             // Optionally, re-display initial story if you want it to revert from colored to plain on new record start
              currentStoryContent?.let { displayInitialStoryContent(it, binding.linearLayoutResultsContainer) }
         }
         binding.buttonPlayUserSentenceRecording.isEnabled = false
@@ -344,12 +342,11 @@ class StoryReadingFragment : Fragment() {
                 if (!isAdded || _binding == null) return@runOnUiThread
                 if (voskJsonResult != null) {
                     val scoringResult = PronunciationScorer.scoreSentenceQuick(voskJsonResult, currentTargetStory)
-                    binding.textViewSentenceScore.text = "Overall Score: ${scoringResult.overallSentenceScore}"
-                    binding.textViewSentenceScore.visibility = View.VISIBLE
+                    // binding.textViewSentenceScore.text = "Overall Score: ${scoringResult.overallSentenceScore}" // Removed
+                    // binding.textViewSentenceScore.visibility = View.VISIBLE // Removed
                     renderPerSentenceFromOverall(currentTargetStory, scoringResult.evaluations, binding.linearLayoutResultsContainer)
                 } else {
                      Toast.makeText(requireContext(), "Could not get speech result.", Toast.LENGTH_SHORT).show()
-                     // Optionally, render the original story without scores or with error indication
                      currentStoryContent?.let { displayInitialStoryContent(it, binding.linearLayoutResultsContainer) }
                 }
                 binding.buttonPlayUserSentenceRecording.isEnabled = wavCreatedSuccessfully
@@ -358,7 +355,6 @@ class StoryReadingFragment : Fragment() {
         }
     }
     
-    // Helper function: Levenshtein Distance (as used in PronunciationScorer)
     private fun levenshtein(s1: String, s2: String): Int {
         val m = s1.length
         val n = s2.length
@@ -380,7 +376,7 @@ class StoryReadingFragment : Fragment() {
     private fun findNextTokenPos(sentence: String, tokenToSearch: String, startIndex: Int): Int {
         if (tokenToSearch.isEmpty()) return -1
         val sentenceLower = sentence.lowercase()
-        val tokenLower = tokenToSearch.lowercase() // Ensure token for search is also lowercased
+        val tokenLower = tokenToSearch.lowercase()
         var idx = sentenceLower.indexOf(tokenLower, startIndex)
         while (idx >= 0) {
             val leftOk = idx == 0 || !sentenceLower[idx - 1].isLetterOrDigit()
@@ -397,18 +393,16 @@ class StoryReadingFragment : Fragment() {
         overallEvaluations: List<PronunciationScorer.SentenceWordEvaluation>,
         container: LinearLayout
     ) {
-        if (!isAdded || _binding == null) return
+        if (!isAdded || _binding == null || !isAdded()) return // Added isAdded() check for safety
         container.removeAllViews()
         val sentences = storyText.split(Regex("(?<=[.!?;:])\\s+")).filter { it.isNotBlank() }
-        var evalIdx = 0 // Pointer for overallEvaluations
+        var evalIdx = 0 
 
         for (sentenceText in sentences) {
             val spannable = SpannableString(sentenceText)
-            val sentenceDisplayWords = sentenceText.split(Regex("\\s+")).filter { it.isNotBlank() } // Words as they appear in the sentence for display
+            val sentenceDisplayWords = sentenceText.split(Regex("\\s+")).filter { it.isNotBlank() } 
             
-            var currentWordPosInSentence = 0 // Cursor for finding word position in sentenceText
-            var sentenceTotalScore = 0
-            var sentenceWordCount = 0
+            var currentWordPosInSentence = 0
 
             for (displayWord in sentenceDisplayWords) {
                 val normalizedDisplayWord = normalizeToken(displayWord)
@@ -430,7 +424,7 @@ class StoryReadingFragment : Fragment() {
                         bestLevDistance = distance
                         bestMatchEvalIndex = k
                     }
-                    if (bestLevDistance == 0) break // Perfect match found
+                    if (bestLevDistance == 0) break 
                 }
 
                 var chosenScore = 0
@@ -444,25 +438,17 @@ class StoryReadingFragment : Fragment() {
 
                     if (currentDistanceRatio <= maxAcceptableDistanceRatio) {
                         chosenScore = matchedEvalWord.score
-                        evalIdx = bestMatchEvalIndex + 1 // Advance pointer
-                    } else {
-                        // No good match within ratio, treat as 0, don't advance evalIdx aggressively
-                        // to allow next display word to match current/next eval item.
-                    }
-                } else {
-                     // No match in window
-                }
+                        evalIdx = bestMatchEvalIndex + 1 
+                    } 
+                } 
 
-                sentenceTotalScore += chosenScore
-                sentenceWordCount++
-
-                // Find position of the original displayWord (with punctuation) to apply span
                 val tokenActualPos = findNextTokenPos(sentenceText, displayWord, currentWordPosInSentence)
                 if (tokenActualPos >= 0) {
-                    val color = if (chosenScore >= 70) Color.GREEN else if (chosenScore > 0) Color.rgb(255,165,0) else Color.RED
+                    val colorRes = if (chosenScore > 0) R.color.blue_500 else R.color.red_500
+                    val colorInt = ContextCompat.getColor(requireContext(), colorRes)
                     try {
                         spannable.setSpan(
-                            ForegroundColorSpan(color),
+                            ForegroundColorSpan(colorInt),
                             tokenActualPos,
                             (tokenActualPos + displayWord.length).coerceAtMost(sentenceText.length),
                             Spannable.SPAN_EXCLUSIVE_EXCLUSIVE
@@ -473,25 +459,14 @@ class StoryReadingFragment : Fragment() {
                     currentWordPosInSentence = tokenActualPos + displayWord.length
                 }
             }
-
-            var avgSentenceScore = if (sentenceWordCount > 0) sentenceTotalScore / sentenceWordCount else 0
             
             val sentenceTv = TextView(requireContext()).apply {
                 text = spannable
-                setTextSize(TypedValue.COMPLEX_UNIT_SP, 18f) // Match initial display size
-                setLineSpacing(0f, 1.2f)
+                setTextSize(TypedValue.COMPLEX_UNIT_SP, 18f)
+                setPadding(4, 8, 4, 8) 
                 setLineSpacing(0f, 1.2f)
             }
             container.addView(sentenceTv)
-
-            // Optional: add small score label for the sentence
-            val scoreTv = TextView(requireContext()).apply {
-                text = "Sentence Score: $avgSentenceScore"
-                setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)
-                setTextColor(Color.DKGRAY)
-                setPadding(4, 0, 4, 16) // More bottom padding for separation
-            }
-            container.addView(scoreTv)
         }
     }
 
