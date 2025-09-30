@@ -8,17 +8,17 @@ import android.animation.ObjectAnimator
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
-// import android.graphics.Color // No longer needed here
+import android.media.AudioAttributes
 import android.media.AudioFormat
+import android.media.AudioManager
 import android.media.AudioRecord
+import android.media.AudioTrack
 import android.media.MediaPlayer // Keep for nativeMediaPlayer
 import android.media.MediaRecorder
 import android.os.Bundle
 import android.provider.Settings
 import android.text.Editable
-// import android.text.Spannable // No longer needed here
 import android.text.SpannableString // Still needed for displayEvaluation if it constructs one for error cases
-// import android.text.style.ForegroundColorSpan // No longer needed here
 import android.text.TextWatcher
 import android.util.Log
 import android.view.LayoutInflater
@@ -35,11 +35,6 @@ import androidx.core.view.isVisible
 import androidx.fragment.app.Fragment
 import androidx.fragment.app.activityViewModels
 import androidx.fragment.app.viewModels
-// import androidx.lifecycle.lifecycleScope // No longer directly used for coroutines here, but good to keep if other uses exist
-import androidx.media3.common.MediaItem
-import androidx.media3.common.PlaybackException
-import androidx.media3.common.Player
-import androidx.media3.exoplayer.ExoPlayer
 import androidx.recyclerview.widget.LinearLayoutManager
 import com.example.realtalkenglishwithAI.R
 import com.example.realtalkenglishwithAI.adapter.SavedWordsAdapter
@@ -50,10 +45,6 @@ import com.example.realtalkenglishwithAI.utils.PronunciationScorer // Import the
 import com.example.realtalkenglishwithAI.viewmodel.PracticeViewModel
 import com.example.realtalkenglishwithAI.viewmodel.VoskModelViewModel
 import com.example.realtalkenglishwithAI.viewmodel.ModelState
-// import com.google.gson.Gson // No longer needed here
-// import kotlinx.coroutines.Dispatchers // Not used
-// import kotlinx.coroutines.launch // Not used
-// import kotlinx.coroutines.withContext // Not used
 import org.vosk.Recognizer
 import java.io.File
 import java.io.FileOutputStream
@@ -61,9 +52,6 @@ import java.io.IOException
 import java.io.FileInputStream
 import kotlin.concurrent.thread
 import kotlin.math.max
-// import kotlin.math.min // No longer needed here
-
-// Data classes PronunciationFeedback, InternalVoskWord, InternalVoskFullResult are removed
 
 class PracticeFragment : Fragment() {
 
@@ -74,20 +62,21 @@ class PracticeFragment : Fragment() {
     private val voskModelViewModel: VoskModelViewModel by activityViewModels()
     private lateinit var savedWordsAdapter: SavedWordsAdapter
 
-    // private val gson = Gson() // Removed
     private var audioRecord: AudioRecord? = null
     @Volatile private var isRecording = false
-    private var audioFilePath: String? = null
+    private var userRecordingPcmPath: String? = null // Renamed from audioFilePath, now always .pcm
     private val sampleRate = 16000
-    private var bufferSize: Int = 0
+    private var bufferSizeForRecording: Int = 0 // Renamed from bufferSize
 
     private var recordingThread: Thread? = null
-    private var pcmFile: File? = null
+    private var pcmFile: File? = null // This will be the File object for userRecordingPcmPath
     private var fileOutputStream: FileOutputStream? = null
 
     private var pulsatingAnimator: AnimatorSet? = null
     private var nativeMediaPlayer: MediaPlayer? = null
-    private var exoPlayer: ExoPlayer? = null
+    // private var exoPlayer: ExoPlayer? = null // Removed ExoPlayer for user recording
+    private var currentAudioTrack: AudioTrack? = null
+    private var playbackThread: Thread? = null
 
     private val requestPermissionLauncher =
         registerForActivityResult(ActivityResultContracts.RequestPermission()) { isGranted: Boolean ->
@@ -108,7 +97,7 @@ class PracticeFragment : Fragment() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        audioFilePath = "${requireContext().externalCacheDir?.absolutePath}/user_recording.wav"
+        userRecordingPcmPath = "${requireContext().externalCacheDir?.absolutePath}/user_recording.pcm"
     }
 
     override fun onCreateView(
@@ -127,15 +116,15 @@ class PracticeFragment : Fragment() {
         observeVoskModelStatus()
 
         updateUIForModelState(voskModelViewModel.modelState.value ?: ModelState.IDLE)
-        val audioFile = audioFilePath?.let { File(it) }
-        if (audioFile != null && audioFile.exists() && audioFile.length() > 0) {
+        val currentPcmFile = userRecordingPcmPath?.let { File(it) }
+        if (currentPcmFile != null && currentPcmFile.exists() && currentPcmFile.length() > 0) {
             binding.playUserButton.isEnabled = true
             binding.playUserButton.alpha = 1.0f
         } else {
             binding.playUserButton.isEnabled = false
             binding.playUserButton.alpha = 0.5f
         }
-        updatePlayUserButtonUI() 
+        updatePlayUserButtonUI()
     }
 
     private fun observeVoskModelStatus() {
@@ -202,10 +191,9 @@ class PracticeFragment : Fragment() {
         if (word.isNotBlank()) {
             practiceViewModel.searchWord(word)
             hideKeyboard()
-            audioFilePath?.let { wavPath ->
-                File(wavPath).delete()
-                File(wavPath.replace(".wav", ".pcm")).delete()
-            }
+            userRecordingPcmPath?.let { File(it).delete() } // Delete old PCM file
+            this.pcmFile = null // Clear the file reference
+
             if (isAdded && _binding != null) {
                 binding.playUserButton.isEnabled = false
                 binding.playUserButton.alpha = 0.5f
@@ -215,23 +203,20 @@ class PracticeFragment : Fragment() {
         }
     }
 
-    // Updated to take DetailedPronunciationResult
     private fun displayEvaluation(result: PronunciationScorer.DetailedPronunciationResult) {
         if (_binding == null || !isAdded) return
         binding.scoreCircleTextView.visibility = View.VISIBLE
-        binding.wordTextView.text = result.coloredTargetDisplay // Use the colored SpannableString
+        binding.wordTextView.text = result.coloredTargetDisplay
 
         if (result.overallScore == -1) {
             binding.scoreCircleTextView.text = "N/A"
             binding.scoreCircleTextView.setBackgroundResource(R.drawable.bg_score_circle_bad)
         } else {
-            val displayScore = max(40, result.overallScore) // Keep the logic to display min 40 for actual scores
+            val displayScore = max(40, result.overallScore)
             binding.scoreCircleTextView.text = getString(R.string.score_display_format, displayScore)
-            if (result.overallScore >= 80) {
-                binding.scoreCircleTextView.setBackgroundResource(R.drawable.bg_score_circle_good)
-            } else {
-                binding.scoreCircleTextView.setBackgroundResource(R.drawable.bg_score_circle_bad)
-            }
+            binding.scoreCircleTextView.setBackgroundResource(
+                if (result.overallScore >= 80) R.drawable.bg_score_circle_good else R.drawable.bg_score_circle_bad
+            )
         }
         practiceViewModel.logPracticeSession()
     }
@@ -252,13 +237,17 @@ class PracticeFragment : Fragment() {
             if (_binding == null || !isAdded || result == null) return@observe
             binding.resultCardView.visibility = View.VISIBLE
             binding.notFoundTextView.visibility = View.GONE
-            binding.wordTextView.text = result.word?.replaceFirstChar { char -> char.uppercase() } // Initial display before scoring
+            binding.wordTextView.text = result.word?.replaceFirstChar { char -> char.uppercase() }
             binding.ipaTextView.text = result.phonetics?.find { !it.text.isNullOrEmpty() }?.text ?: "N/A"
             binding.meaningTextView.text = result.meanings?.firstOrNull()?.definitions?.firstOrNull()?.definition ?: "No definition found."
             binding.scoreCircleTextView.visibility = View.GONE
-            val audioFile = audioFilePath?.let { File(it) }
-            binding.playUserButton.isEnabled = audioFile != null && audioFile.exists() && audioFile.length() > 0
-            binding.playUserButton.alpha = if (binding.playUserButton.isEnabled) 1.0f else 0.5f
+
+            val currentPcmFileToCheck = userRecordingPcmPath?.let { File(it) }
+            val pcmReady = currentPcmFileToCheck != null && currentPcmFileToCheck.exists() && currentPcmFileToCheck.length() > 0
+            binding.playUserButton.isEnabled = pcmReady
+            binding.playUserButton.alpha = if (pcmReady) 1.0f else 0.5f
+            updatePlayUserButtonUI()
+
             val tip = generatePronunciationTip(result.word ?: "")
             binding.pronunciationTipSection.visibility = if (tip != null) View.VISIBLE else View.GONE
             binding.tipContentTextView.text = tip
@@ -295,7 +284,7 @@ class PracticeFragment : Fragment() {
             if (!isAdded) return@setOnClickListener
             if (Settings.canDrawOverlays(requireContext())) {
                 val serviceIntent = Intent(requireContext(), FloatingSearchService::class.java)
-                requireActivity().stopService(serviceIntent) // Stop first to avoid multiple instances
+                requireActivity().stopService(serviceIntent) 
                 requireActivity().startService(serviceIntent)
             } else {
                 val intent = Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, "package:${requireActivity().packageName}".toUri())
@@ -321,10 +310,9 @@ class PracticeFragment : Fragment() {
         })
         binding.favoriteResultButton.setOnClickListener {
             if (!isAdded || _binding == null) return@setOnClickListener
-            val word = binding.wordTextView.text.toString() // This might be SpannableString now
+            val word = binding.wordTextView.text.toString()
             if (word.isNotEmpty()) {
-                // Ensure we get the plain string for comparison
-                practiceViewModel.allSavedWords.value?.find { it.word == word.toString().lowercase() }?.let {
+                practiceViewModel.allSavedWords.value?.find { it.word == word.lowercase() }?.let {
                     practiceViewModel.toggleFavorite(it)
                 }
             }
@@ -352,7 +340,7 @@ class PracticeFragment : Fragment() {
                     Log.e("PracticeFragment", "Native MediaPlayer error: what=$what, extra=$extra")
                     mp.release(); nativeMediaPlayer = null; true
                 }
-            } catch (e: Exception) { // Catch broader exceptions
+            } catch (e: Exception) {
                 Log.e("PracticeFragment", "playNativeAudio failed", e)
                 release(); nativeMediaPlayer = null
             }
@@ -385,50 +373,48 @@ class PracticeFragment : Fragment() {
     }
 
     private fun startRecording() {
+        stopCurrentAudioTrackPlayback() // Stop any ongoing playback
+
         if (voskModelViewModel.voskModel == null) {
             Toast.makeText(requireContext(), "Cannot start: model not ready.", Toast.LENGTH_SHORT).show(); return
         }
         if (_binding == null || !isAdded) return
-        val originalTargetWordForDisplay = binding.wordTextView.text.toString() // This will be the word from API or user input
+        val originalTargetWordForDisplay = binding.wordTextView.text.toString()
         if (originalTargetWordForDisplay.isBlank()) {
             Toast.makeText(requireContext(), "No word to practice.", Toast.LENGTH_SHORT).show(); return
         }
 
-        audioFilePath?.let { wavPath ->
-            File(wavPath).delete()
-            File(wavPath.replace(".wav", ".pcm")).delete()
-        }
+        userRecordingPcmPath?.let { File(it).delete() } // Delete previous PCM file
+
         activity?.runOnUiThread {
             if (isAdded && _binding != null) {
                 binding.playUserButton.isEnabled = false
                 binding.playUserButton.alpha = 0.5f
                 updatePlayUserButtonUI()
                 binding.scoreCircleTextView.visibility = View.GONE
-                // Reset wordTextView to plain text before new recording if it was Spannable
-                // This ensures target word for PronunciationScorer is the plain, original word.
-                binding.wordTextView.text = originalTargetWordForDisplay 
+                binding.wordTextView.text = originalTargetWordForDisplay
             }
         }
 
-        val pcmFilePathString = audioFilePath?.replace(".wav", ".pcm")
-        if (pcmFilePathString == null) {
-            Toast.makeText(requireContext(), "Recording setup error.", Toast.LENGTH_SHORT).show(); return
+        val pcmPathString = userRecordingPcmPath
+        if (pcmPathString == null) {
+            Toast.makeText(requireContext(), "Recording setup error (path).", Toast.LENGTH_SHORT).show(); return
         }
-        this.pcmFile = File(pcmFilePathString)
+        this.pcmFile = File(pcmPathString)
 
         try {
             this.fileOutputStream = FileOutputStream(this.pcmFile)
             val minBufferSize = AudioRecord.getMinBufferSize(sampleRate, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT)
-            if (minBufferSize <= 0) { // More robust check
+            if (minBufferSize <= 0) {
                 Log.e("PracticeFragment", "Invalid minBufferSize: $minBufferSize")
                 this.fileOutputStream?.close(); this.fileOutputStream = null; this.pcmFile = null; return
             }
-            bufferSize = max(minBufferSize, 4096)
-            audioRecord = AudioRecord(MediaRecorder.AudioSource.MIC, sampleRate, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT, bufferSize * 2)
+            bufferSizeForRecording = max(minBufferSize, 4096)
+            audioRecord = AudioRecord(MediaRecorder.AudioSource.MIC, sampleRate, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT, bufferSizeForRecording * 2)
         } catch (e: Exception) {
             Log.e("PracticeFragment", "Failed to initialize AudioRecord/FileOutputStream", e)
             isRecording = false; updateRecordButtonUI(); stopPulsatingAnimation()
-            this.fileOutputStream?.close(); this.fileOutputStream = null; this.pcmFile = null
+            this.fileOutputStream?.closeSafely(); this.fileOutputStream = null; this.pcmFile = null
             audioRecord?.release(); audioRecord = null; return
         }
 
@@ -439,17 +425,12 @@ class PracticeFragment : Fragment() {
 
             recordingThread = thread(start = true, name = "AudioProducerThread") {
                 android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_AUDIO)
-                val shortBuffer = ShortArray(bufferSize)
+                // Using ByteArray directly as Vosk and AudioTrack can handle it.
+                val audioBuffer = ByteArray(bufferSizeForRecording) 
                 while (isRecording) {
-                    val readResult = audioRecord?.read(shortBuffer, 0, shortBuffer.size) ?: 0
+                    val readResult = audioRecord?.read(audioBuffer, 0, audioBuffer.size) ?: 0
                     if (readResult > 0) {
-                        val byteArray = ByteArray(readResult * 2)
-                        for (i in 0 until readResult) {
-                            val v = shortBuffer[i].toInt()
-                            byteArray[i * 2] = (v and 0xFF).toByte()
-                            byteArray[i * 2 + 1] = ((v shr 8) and 0xFF).toByte()
-                        }
-                        try { this.fileOutputStream?.write(byteArray) }
+                        try { this.fileOutputStream?.write(audioBuffer, 0, readResult) }
                         catch (e: IOException) { Log.e("PracticeFragment", "FileOutputStream.write() error", e); break }
                     } else if (readResult < 0) {
                         Log.e("PracticeFragment", "Error reading audio data: $readResult"); break
@@ -459,28 +440,27 @@ class PracticeFragment : Fragment() {
         } catch (e: IllegalStateException) {
             Log.e("PracticeFragment", "AudioRecord.startRecording() failed.", e)
             isRecording = false; updateRecordButtonUI(); stopPulsatingAnimation()
-            this.fileOutputStream?.close(); this.fileOutputStream = null; this.pcmFile = null
+            this.fileOutputStream?.closeSafely(); this.fileOutputStream = null; this.pcmFile = null
             audioRecord?.release(); audioRecord = null
         }
     }
 
     private fun stopRecording() {
-        if (!isRecording && recordingThread == null) return
+        if (!isRecording && recordingThread == null && audioRecord == null) return
         isRecording = false
         if (isAdded && _binding != null) { updateRecordButtonUI(); stopPulsatingAnimation() }
 
         try { audioRecord?.stop() } catch (e: IllegalStateException) { Log.e("PracticeFragment", "Error stopping AudioRecord", e) }
         finally { try { audioRecord?.release() } catch (e: Exception) { Log.e("PracticeFragment", "Error releasing AudioRecord", e) }; audioRecord = null }
 
-        try { fileOutputStream?.flush(); fileOutputStream?.close() } 
-        catch (e: IOException) { Log.e("PracticeFragment", "Error closing FileOutputStream", e) }
+        try { fileOutputStream?.flush(); fileOutputStream?.closeSafely() } 
+        catch (e: IOException) { Log.e("PracticeFragment", "Error closing FileOutputStream (already handled by closeSafely?)", e) }
         fileOutputStream = null
 
-        val currentPcmFile = this.pcmFile
-        if (currentPcmFile == null) {
+        val currentPcmFileForProcessing = this.pcmFile
+        if (currentPcmFileForProcessing == null) {
             Toast.makeText(requireContext(), "Recording data not found.", Toast.LENGTH_SHORT).show(); return
         }
-        // Use the text from wordTextView as the target, ensuring it's the plain word before scoring
         val currentTargetWord = if (isAdded && _binding != null) binding.wordTextView.text.toString() else ""
         if (currentTargetWord.isBlank()) {
             Log.w("PracticeFragment", "Target word is blank, skipping post-processing."); return
@@ -492,23 +472,25 @@ class PracticeFragment : Fragment() {
 
         thread(start = true, name = "PostProcessThread") {
             var finalResultJson: String? = null
-            val targetForThread = currentTargetWord // Use the plain string
+            val targetForThread = currentTargetWord
+            var pcmFileIsGoodForPlayback = false
 
             try {
-                if (!currentPcmFile.exists() || currentPcmFile.length() == 0L) {
-                    Log.e("PracticeFragment", "PCM file missing/empty: ${currentPcmFile.absolutePath}")
+                if (!currentPcmFileForProcessing.exists() || currentPcmFileForProcessing.length() == 0L) {
+                    Log.e("PracticeFragment", "PCM file missing/empty for Vosk: ${currentPcmFileForProcessing.absolutePath}")
                     activity?.runOnUiThread {
                         if (isAdded && _binding != null) {
                             Toast.makeText(requireContext(), "Ghi âm thất bại.", Toast.LENGTH_SHORT).show()
-                            // Call PronunciationScorer even for error to get default colored SpannableString
                             val errorFeedback = PronunciationScorer.scoreWordDetailed("", targetForThread)
                             displayEvaluation(errorFeedback)
+                            binding.playUserButton.isEnabled = false; binding.playUserButton.alpha = 0.5f
+                            updatePlayUserButtonUI()
                         }
                     }
                     return@thread
                 }
 
-                FileInputStream(currentPcmFile).use { fis ->
+                FileInputStream(currentPcmFileForProcessing).use { fis ->
                     val recognizer = Recognizer(currentVoskModel, sampleRate.toFloat())
                     val buffer = ByteArray(4096)
                     var bytesRead: Int
@@ -517,34 +499,23 @@ class PracticeFragment : Fragment() {
                     }
                     val silenceDurationMs = 300
                     val numSamplesSilence = (sampleRate * silenceDurationMs / 1000)
-                    val silenceBytes = ByteArray(numSamplesSilence * 2)
+                    val silenceBytes = ByteArray(numSamplesSilence * 2) // For 16-bit PCM
                     if (silenceBytes.isNotEmpty()) recognizer.acceptWaveForm(silenceBytes, silenceBytes.size)
                     finalResultJson = recognizer.finalResult
                     recognizer.close()
                 }
                 Log.d("PracticeFragment", "PostProcess Vosk JSON: $finalResultJson")
 
-                var wavFileSuccessfullyCreated = false
-                audioFilePath?.let { File(it) }?.also { wavFile ->
-                    if (currentPcmFile.exists()) {
-                        try {
-                            val dataSizeForWavHeader = currentPcmFile.length().toInt()
-                            FileOutputStream(wavFile).use { fosWav ->
-                                fosWav.write(createWavHeader(dataSizeForWavHeader))
-                                FileInputStream(currentPcmFile).use { fisPcm -> fisPcm.copyTo(fosWav) }
-                            }
-                            wavFileSuccessfullyCreated = wavFile.exists() && wavFile.length() > 44
-                            if (wavFileSuccessfullyCreated) currentPcmFile.delete()
-                        } catch (e: Exception) { Log.e("PracticeFragment", "Error creating/deleting WAV/PCM", e) }
-                    }
-                }
+                // PCM file is kept, not converted to WAV and deleted.
+                // We just confirm it's still good for playback.
+                pcmFileIsGoodForPlayback = currentPcmFileForProcessing.exists() && currentPcmFileForProcessing.length() > 0
 
                 val feedback = PronunciationScorer.scoreWordDetailed(finalResultJson ?: "{\"text\":\"\"}", targetForThread)
                 activity?.runOnUiThread {
                     if (isAdded && _binding != null) {
                         displayEvaluation(feedback)
-                        binding.playUserButton.isEnabled = wavFileSuccessfullyCreated
-                        binding.playUserButton.alpha = if (wavFileSuccessfullyCreated) 1.0f else 0.5f
+                        binding.playUserButton.isEnabled = pcmFileIsGoodForPlayback
+                        binding.playUserButton.alpha = if (pcmFileIsGoodForPlayback) 1.0f else 0.5f
                         updatePlayUserButtonUI()
                     }
                 }
@@ -556,6 +527,7 @@ class PracticeFragment : Fragment() {
                         val errorFeedback = PronunciationScorer.scoreWordDetailed("", targetForThread)
                         displayEvaluation(errorFeedback)
                         binding.playUserButton.isEnabled = false; binding.playUserButton.alpha = 0.5f
+                        updatePlayUserButtonUI()
                     }
                 }
             }
@@ -563,49 +535,124 @@ class PracticeFragment : Fragment() {
     }
 
     private fun playUserRecording() {
-        if (!isAdded || _binding == null) return
-        val audioFile = audioFilePath?.let { File(it) }
-        if (audioFile == null || !audioFile.exists() || audioFile.length() == 0L) {
-            Toast.makeText(requireContext(), "No recording available.", Toast.LENGTH_SHORT).show()
-            binding.playUserButton.isEnabled = false; binding.playUserButton.alpha = 0.5f; return
-        }
-        if (exoPlayer?.isPlaying == true) {
-            stopUserPlayback()
-        } else {
-            exoPlayer?.release()
-            exoPlayer = ExoPlayer.Builder(requireContext()).build().apply {
-                setMediaItem(MediaItem.fromUri(audioFile.toUri()))
-                prepare(); playWhenReady = true
-                binding.playUserButton.isEnabled = false; updatePlayUserButtonUI()
-                addListener(object : Player.Listener {
-                    override fun onPlaybackStateChanged(playbackState: Int) {
-                        if (!isAdded || _binding == null) return
-                        if (playbackState == Player.STATE_ENDED || playbackState == Player.STATE_IDLE) stopUserPlayback()
-                        else binding.playUserButton.isEnabled = playbackState == Player.STATE_READY
-                    }
-                    override fun onPlayerError(error: PlaybackException) {
-                        Log.e("PracticeFragment", "ExoPlayer error: $error"); stopUserPlayback()
-                    }
-                })
+        stopCurrentAudioTrackPlayback() // Stop any previous playback
+
+        val currentPcmFileToPlay = this.pcmFile
+        if (currentPcmFileToPlay?.exists() != true || currentPcmFileToPlay.length() == 0L) {
+            Toast.makeText(requireContext(), "No recording available to play.", Toast.LENGTH_SHORT).show()
+            if(isAdded && _binding != null) {
+                 binding.playUserButton.isEnabled = false; binding.playUserButton.alpha = 0.5f
+                 updatePlayUserButtonUI()
             }
+            return
         }
+        playPcmWithAudioTrack(currentPcmFileToPlay)
     }
 
-    private fun stopUserPlayback() {
-        exoPlayer?.stop(); exoPlayer?.release(); exoPlayer = null
-        if (_binding == null || !isAdded) return
-        activity?.runOnUiThread {
-            if (isAdded && _binding != null) {
-                val audioFile = audioFilePath?.let { File(it) }
-                val canPlay = audioFile != null && audioFile.exists() && audioFile.length() > 0L
-                binding.playUserButton.isEnabled = canPlay
-                binding.playUserButton.alpha = if(canPlay) 1.0f else 0.5f
-                updatePlayUserButtonUI()
+    private fun stopCurrentAudioTrackPlayback(){
+        playbackThread?.interrupt()
+        try {
+            playbackThread?.join(500) 
+        } catch (e: InterruptedException) {
+            Thread.currentThread().interrupt()
+            Log.e("PracticeFragment", "Interrupted while joining playback thread")
+        }
+        playbackThread = null
+
+        currentAudioTrack?.let {
+            try {
+                if (it.playState == AudioTrack.PLAYSTATE_PLAYING) {
+                    it.stop()
+                }
+                it.release()
+                Log.d("PracticeFragment", "AudioTrack stopped and released.")
+            } catch (e: IllegalStateException) {
+                Log.e("PracticeFragment", "Error stopping/releasing AudioTrack: ${e.message}")
             }
         }
+        currentAudioTrack = null
+        // Ensure UI is updated after stopping
+        activity?.runOnUiThread { if(isAdded && _binding != null) updatePlayUserButtonUI() }
     }
 
-    // levenshtein, alignStrings, processVoskResult, calculateFlexibleScore are REMOVED
+    private fun playPcmWithAudioTrack(audioPcmFile: File) {
+        val minPlayBufferSize = AudioTrack.getMinBufferSize(
+            sampleRate,
+            AudioFormat.CHANNEL_OUT_MONO,
+            AudioFormat.ENCODING_PCM_16BIT
+        )
+        if (minPlayBufferSize == AudioTrack.ERROR_BAD_VALUE || minPlayBufferSize == AudioTrack.ERROR) {
+            Log.e("PracticeFragment", "AudioTrack.getMinBufferSize failed for playback")
+            Toast.makeText(requireContext(), "AudioTrack parameter error.", Toast.LENGTH_SHORT).show()
+            return
+        }
+
+        try {
+            currentAudioTrack = AudioTrack(
+                AudioAttributes.Builder()
+                    .setUsage(AudioAttributes.USAGE_MEDIA)
+                    .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
+                    .build(),
+                AudioFormat.Builder()
+                    .setEncoding(AudioFormat.ENCODING_PCM_16BIT)
+                    .setSampleRate(sampleRate)
+                    .setChannelMask(AudioFormat.CHANNEL_OUT_MONO)
+                    .build(),
+                minPlayBufferSize,
+                AudioTrack.MODE_STREAM,
+                AudioManager.AUDIO_SESSION_ID_GENERATE
+            )
+
+            if (currentAudioTrack?.state != AudioTrack.STATE_INITIALIZED) {
+                Log.e("PracticeFragment", "AudioTrack not initialized for playback")
+                Toast.makeText(requireContext(), "AudioTrack initialization failed.", Toast.LENGTH_SHORT).show()
+                currentAudioTrack = null
+                return
+            }
+
+            currentAudioTrack?.play()
+            Toast.makeText(requireContext(), "Playing recording...", Toast.LENGTH_SHORT).show()
+            if(isAdded && _binding != null) updatePlayUserButtonUI() // Update button to show stop icon
+
+            playbackThread = thread(start = true, name = "PcmPlaybackThreadPractice") {
+                var bytesReadTotal = 0L
+                try {
+                    FileInputStream(audioPcmFile).use { fis ->
+                        val buffer = ByteArray(minPlayBufferSize)
+                        var bytesRead: Int // Corrected: Added Int type
+                        // Check currentAudioTrack?.playState to allow interruption
+                        while (fis.read(buffer).also { bytesRead = it } != -1 && currentAudioTrack?.playState == AudioTrack.PLAYSTATE_PLAYING) {
+                            if (bytesRead > 0) {
+                                currentAudioTrack?.write(buffer, 0, bytesRead)
+                                bytesReadTotal += bytesRead
+                            }
+                        }
+                    }
+                    Log.d("PracticeFragment", "PCM playback finished. Bytes written: $bytesReadTotal")
+                    activity?.runOnUiThread {
+                         if(isAdded && _binding != null && currentAudioTrack != null && currentAudioTrack?.playState != AudioTrack.PLAYSTATE_STOPPED) { // Avoid Toast if stopped manually
+                            Toast.makeText(requireContext(), "Playback finished.", Toast.LENGTH_SHORT).show()
+                         }
+                    }
+                } catch (e: IOException) {
+                    Log.e("PracticeFragment", "IOException during PCM playback", e)
+                    activity?.runOnUiThread { if(isAdded) Toast.makeText(requireContext(), "Error playing recording.", Toast.LENGTH_SHORT).show() }
+                } catch (e: IllegalStateException) {
+                     Log.e("PracticeFragment", "IllegalStateException during PCM playback", e)
+                     activity?.runOnUiThread { if(isAdded) Toast.makeText(requireContext(), "Playback stopped abruptly.", Toast.LENGTH_SHORT).show() }
+                } finally {
+                    activity?.runOnUiThread { //This ensures UI update and cleanup happens on main thread
+                        stopCurrentAudioTrackPlayback() // This will also call updatePlayUserButtonUI()
+                    }
+                }
+            }
+        } catch (e: Exception) {
+            Log.e("PracticeFragment", "AudioTrack playback setup failed", e)
+            Toast.makeText(requireContext(), "Audio playback setup failed: ${e.message}", Toast.LENGTH_LONG).show()
+            currentAudioTrack = null
+            if(isAdded && _binding != null) updatePlayUserButtonUI()
+        }
+    }
 
     private fun startPulsatingAnimation() {
         if (!isAdded || _binding == null) return
@@ -629,7 +676,7 @@ class PracticeFragment : Fragment() {
     }
 
     private fun stopPulsatingAnimation() {
-        if (_binding == null) return
+        if (_binding == null || !isAdded) return
         pulsatingAnimator?.cancel()
         binding.pulsatingView.visibility = View.GONE
         binding.pulsatingView.alpha = 1f; binding.pulsatingView.scaleX = 1f; binding.pulsatingView.scaleY = 1f
@@ -642,47 +689,29 @@ class PracticeFragment : Fragment() {
 
     private fun updatePlayUserButtonUI() {
         if (_binding == null || !isAdded) return
-        val isPlaying = exoPlayer?.isPlaying == true && exoPlayer?.playbackState != Player.STATE_ENDED && exoPlayer?.playbackState != Player.STATE_IDLE
-        binding.playUserButton.setImageResource(if (isPlaying) R.drawable.ic_close else R.drawable.ic_speaker_wave)
+        val isPlaying = currentAudioTrack?.playState == AudioTrack.PLAYSTATE_PLAYING
+        binding.playUserButton.setImageResource(if (isPlaying) R.drawable.ic_stop_audio else R.drawable.ic_speaker_wave) // Changed to ic_stop_audio
+        // Enable if not playing AND pcmFile is valid
+        val pcmFileIsAvailable = this.pcmFile?.exists() == true && this.pcmFile!!.length() > 0
+        binding.playUserButton.isEnabled = !isPlaying || pcmFileIsAvailable // Allow stopping if playing, allow playing if file available & not playing
+        binding.playUserButton.alpha = if(binding.playUserButton.isEnabled) 1.0f else 0.5f
     }
 
-    @Throws(IOException::class)
-    private fun addWavHeader(pcmFile: File, wavFile: File) { // This function is effectively replaced by direct WAV creation in PostProcess
-        // Kept for reference if direct PCM to WAV streaming needs this logic separately
-        if (!pcmFile.exists()) { Log.e("PracticeFragment", "PCM not found for WAV: ${pcmFile.absolutePath}"); return }
-        val pcmData = pcmFile.readBytes()
-        if (pcmData.isEmpty()) { Log.w("PracticeFragment", "PCM empty: ${pcmFile.absolutePath}"); wavFile.delete(); return }
-        FileOutputStream(wavFile).use { it.write(createWavHeader(pcmData.size)); it.write(pcmData) }
-        // Log.d("PracticeFragment", "WAV header added: ${wavFile.absolutePath}") // PCM deletion is now in PostProcess
-    }
+    // Removed addWavHeader and createWavHeader functions
+    private fun FileOutputStream.closeSafely() { try { close() } catch (e: IOException) { Log.e("PracticeFragment", "FileOutputStream.close() failed safely", e) } }
 
-    private fun createWavHeader(dataSize: Int): ByteArray {
-        val header = ByteArray(44); val totalDataLen = dataSize + 36; val channels = 1; val byteRate = sampleRate * channels * (16 / 8)
-        header[0] = 'R'.code.toByte(); header[1] = 'I'.code.toByte(); header[2] = 'F'.code.toByte(); header[3] = 'F'.code.toByte()
-        header[4] = (totalDataLen and 0xff).toByte(); header[5] = (totalDataLen shr 8 and 0xff).toByte(); header[6] = (totalDataLen shr 16 and 0xff).toByte(); header[7] = (totalDataLen shr 24 and 0xff).toByte()
-        header[8] = 'W'.code.toByte(); header[9] = 'A'.code.toByte(); header[10] = 'V'.code.toByte(); header[11] = 'E'.code.toByte()
-        header[12] = 'f'.code.toByte(); header[13] = 'm'.code.toByte(); header[14] = 't'.code.toByte(); header[15] = ' '.code.toByte()
-        header[16] = 16; header[17] = 0; header[18] = 0; header[19] = 0; header[20] = 1; header[21] = 0
-        header[22] = channels.toByte(); header[23] = 0
-        header[24] = (sampleRate and 0xff).toByte(); header[25] = (sampleRate shr 8 and 0xff).toByte(); header[26] = (sampleRate shr 16 and 0xff).toByte(); header[27] = (sampleRate shr 24 and 0xff).toByte()
-        header[28] = (byteRate and 0xff).toByte(); header[29] = (byteRate shr 8 and 0xff).toByte(); header[30] = (byteRate shr 16 and 0xff).toByte(); header[31] = (byteRate shr 24 and 0xff).toByte()
-        header[32] = (channels * 16 / 8).toByte(); header[33] = 0; header[34] = 16; header[35] = 0
-        header[36] = 'd'.code.toByte(); header[37] = 'a'.code.toByte(); header[38] = 't'.code.toByte(); header[39] = 'a'.code.toByte()
-        header[40] = (dataSize and 0xff).toByte(); header[41] = (dataSize shr 8 and 0xff).toByte(); header[42] = (dataSize shr 16 and 0xff).toByte(); header[43] = (dataSize shr 24 and 0xff).toByte()
-        return header
-    }
 
     override fun onStop() {
         super.onStop()
         if (isRecording) { Log.d("PracticeFragment", "onStop: stopping recording."); stopRecording() }
         nativeMediaPlayer?.release(); nativeMediaPlayer = null
-        stopUserPlayback()
+        stopCurrentAudioTrackPlayback()
     }
 
     override fun onDestroyView() {
         super.onDestroyView()
         pulsatingAnimator?.cancel(); pulsatingAnimator = null
-        stopUserPlayback()
+        stopCurrentAudioTrackPlayback()
         _binding = null
         Log.d("PracticeFragment", "onDestroyView: _binding is null.")
     }
