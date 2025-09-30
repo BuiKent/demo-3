@@ -128,30 +128,51 @@
 
         <com.google.android.material.card.MaterialCardView
             android:id="@+id/cardViewReadingToday"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
+            android:layout_width="140dp" 
+            android:layout_height="180dp"
             android:layout_marginTop="16dp"
+            android:layout_gravity="start" 
             app:cardCornerRadius="12dp"
-            app:cardElevation="4dp"
-            app:contentPadding="16dp">
+            app:cardElevation="4dp">
 
-            <LinearLayout
+            <androidx.constraintlayout.widget.ConstraintLayout
                 android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:orientation="horizontal"
-                android:gravity="center_vertical">
+                android:layout_height="match_parent">
+
+                <ImageView
+                    android:id="@+id/imageViewStoryCardBackground"
+                    android:layout_width="0dp"
+                    android:layout_height="0dp"
+                    android:scaleType="centerCrop"
+                    android:background="?attr/colorSecondary" 
+                    app:layout_constraintTop_toTopOf="parent"
+                    app:layout_constraintBottom_toBottomOf="parent"
+                    app:layout_constraintStart_toStartOf="parent"
+                    app:layout_constraintEnd_toEndOf="parent"/>
+
+                <View
+                    android:layout_width="0dp"
+                    android:layout_height="0dp"
+                    android:background="#40000000" 
+                    app:layout_constraintTop_toTopOf="parent"
+                    app:layout_constraintBottom_toBottomOf="parent"
+                    app:layout_constraintStart_toStartOf="parent"
+                    app:layout_constraintEnd_toEndOf="parent"/>
 
                 <TextView
-                    android:id="@+id/textViewReadingToday"
+                    android:id="@+id/textViewStoryCardTitle"
                     android:layout_width="0dp"
                     android:layout_height="wrap_content"
-                    android:layout_weight="1"
-                    android:text="@string/today_s_story"
-                    android:textSize="18sp"
-                    android:textColor="@android:color/black"
-                    android:textStyle="bold"/>
+                    android:text="@string/today_s_story" 
+                    android:textColor="@android:color/white"
+                    android:textSize="16sp"
+                    android:textStyle="bold"
+                    android:layout_margin="8dp"
+                    app:layout_constraintBottom_toBottomOf="parent"
+                    app:layout_constraintStart_toStartOf="parent"
+                    app:layout_constraintEnd_toEndOf="parent"/>
 
-            </LinearLayout>
+            </androidx.constraintlayout.widget.ConstraintLayout>
         </com.google.android.material.card.MaterialCardView>
 
     </LinearLayout>

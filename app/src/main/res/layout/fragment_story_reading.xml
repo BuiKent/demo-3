@@ -11,7 +11,9 @@
         android:id="@+id/appBarLayoutStory"
         android:layout_width="0dp"
         android:layout_height="wrap_content"
-        android:theme="@style/ThemeOverlay.AppCompat.Dark.ActionBar" 
+        android:theme="@style/ThemeOverlay.AppCompat.Light" 
+        android:background="@android:color/white"
+        app:elevation="4dp"
         app:layout_constraintTop_toTopOf="parent"
         app:layout_constraintStart_toStartOf="parent"
         app:layout_constraintEnd_toEndOf="parent">
@@ -20,7 +22,8 @@
             android:id="@+id/toolbarStoryReading"
             android:layout_width="match_parent"
             android:layout_height="?attr/actionBarSize"
-            android:background="?attr/colorPrimary"
+            app:titleTextColor="#333333"
+            app:navigationIconTint="#333333"
             app:popupTheme="@style/ThemeOverlay.AppCompat.Light" />
 
     </com.google.android.material.appbar.AppBarLayout>

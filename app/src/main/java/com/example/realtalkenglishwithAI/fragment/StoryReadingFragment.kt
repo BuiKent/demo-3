@@ -4,6 +4,7 @@ import android.Manifest
 import android.content.Context
 import android.content.pm.PackageManager
 import android.graphics.Color
+import android.graphics.Typeface
 import android.media.AudioFormat
 import android.media.AudioRecord
 import android.media.MediaPlayer
@@ -13,14 +14,16 @@ import android.text.Spannable
 import android.text.SpannableString
 import android.text.style.ForegroundColorSpan
 import android.util.Log
-import android.view.* // Added for Menu
+import android.view.* 
+import android.widget.TextView // Added for Toolbar title TextView
 import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.appcompat.app.AppCompatActivity // Added for Toolbar
+import androidx.appcompat.app.AppCompatActivity 
 import androidx.core.content.ContextCompat
+import androidx.core.content.res.ResourcesCompat // Added for custom font loading
 import androidx.fragment.app.Fragment
 import androidx.fragment.app.activityViewModels
-import androidx.navigation.fragment.findNavController // Added for Toolbar back navigation
+import androidx.navigation.fragment.findNavController 
 import com.example.realtalkenglishwithAI.R
 import com.example.realtalkenglishwithAI.databinding.FragmentStoryReadingBinding
 import com.example.realtalkenglishwithAI.utils.PronunciationScorer
@@ -82,7 +85,7 @@ class StoryReadingFragment : Fragment() {
         val wavPath = "${requireContext().externalCacheDir?.absolutePath}/story_sentence_audio_playback.wav"
         wavFileForPlayback = File(wavPath)
 
-        setHasOptionsMenu(true) // Indicate that this fragment has an options menu for the toolbar
+        setHasOptionsMenu(true) 
     }
 
     override fun onCreateView(
@@ -96,7 +99,7 @@ class StoryReadingFragment : Fragment() {
     override fun onViewCreated(view: View, savedInstanceState: Bundle?) {
         super.onViewCreated(view, savedInstanceState)
 
-        setupToolbar() // Call Toolbar setup
+        setupToolbar() 
 
         currentStoryContent?.let {
             binding.textViewStoryContent.text = it
@@ -111,10 +114,29 @@ class StoryReadingFragment : Fragment() {
         if (activity is AppCompatActivity) {
             (activity as AppCompatActivity).setSupportActionBar(binding.toolbarStoryReading)
         }
-        (activity as? AppCompatActivity)?.supportActionBar?.title = currentStoryTitle ?: "Story" // Set title
-        (activity as? AppCompatActivity)?.supportActionBar?.setDisplayHomeAsUpEnabled(true) // Show back button
-        (activity as? AppCompatActivity)?.supportActionBar?.setDisplayShowHomeEnabled(true) // Ensure back button is shown
-        // TODO: Apply Script font to toolbar title if available
+        val actionBar = (activity as? AppCompatActivity)?.supportActionBar
+        actionBar?.title = currentStoryTitle ?: "Story" 
+        actionBar?.setDisplayHomeAsUpEnabled(true) 
+        actionBar?.setDisplayShowHomeEnabled(true) 
+
+        // Apply custom font and color to Toolbar title
+        try {
+            val typeface: Typeface? = ResourcesCompat.getFont(requireContext(), R.font.dancing_script)
+            // Iterate through Toolbar children to find the Title TextView
+            for (i in 0 until binding.toolbarStoryReading.childCount) {
+                val childView = binding.toolbarStoryReading.getChildAt(i)
+                if (childView is TextView) {
+                    // Check if this TextView is likely the title view
+                    if (childView.text.toString().equals(actionBar?.title?.toString(), ignoreCase = true)) {
+                        childView.typeface = typeface
+                        childView.setTextColor(Color.parseColor("#333333")) // Set title text color
+                        break // Font and color applied to title
+                    }
+                }
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to load or apply custom font/color for toolbar title: ${R.font.dancing_script}", e)
+        }
     }
 
     override fun onCreateOptionsMenu(menu: Menu, inflater: MenuInflater) {
@@ -124,13 +146,12 @@ class StoryReadingFragment : Fragment() {
 
     override fun onOptionsItemSelected(item: MenuItem): Boolean {
         return when (item.itemId) {
-            android.R.id.home -> { // Handle back button press
+            android.R.id.home -> { 
                 findNavController().navigateUp()
                 true
             }
             R.id.action_play_story_audio -> {
                 Toast.makeText(requireContext(), "Play story audio clicked (Not implemented yet)", Toast.LENGTH_SHORT).show()
-                // TODO: Implement actual audio playback of the story if needed
                 true
             }
             else -> super.onOptionsItemSelected(item)
@@ -502,7 +523,6 @@ class StoryReadingFragment : Fragment() {
         recognizer = null
         mediaPlayer?.release()
         mediaPlayer = null
-        // Ensure the support action bar is cleared to avoid issues if activity is reused by other fragments
         (activity as? AppCompatActivity)?.setSupportActionBar(null)
         _binding = null
         Log.d(TAG, "StoryReadingFragment onDestroyView")
