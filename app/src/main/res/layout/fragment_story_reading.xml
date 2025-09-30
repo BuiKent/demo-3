@@ -33,38 +33,36 @@
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
         android:textAppearance="@style/TextAppearance.AppCompat.Headline"
-        android:visibility="gone"
+        android:visibility="gone" 
         android:layout_marginTop="16dp"
         android:paddingStart="16dp"
         android:paddingEnd="16dp"
         app:layout_constraintTop_toBottomOf="@id/appBarLayoutStory"
         app:layout_constraintEnd_toEndOf="parent"
         app:layout_constraintStart_toStartOf="parent"
-        tools:text="Score: 85"
+        tools:text="Overall Score: 85"
         tools:visibility="visible"/>
 
     <ScrollView
-        android:id="@+id/scrollViewStoryContent"
+        android:id="@+id/scrollViewResults"
         android:layout_width="0dp"
         android:layout_height="0dp"
         android:layout_marginTop="8dp"
         android:layout_marginBottom="16dp"
-        android:paddingStart="16dp" 
+        android:paddingStart="16dp"
         android:paddingEnd="16dp"
         app:layout_constraintTop_toBottomOf="@id/textViewSentenceScore"
         app:layout_constraintBottom_toTopOf="@id/buttonRecordStorySentence"
         app:layout_constraintStart_toStartOf="parent"
-        app:layout_constraintEnd_toEndOf="parent">
+        app:layout_constraintEnd_toEndOf="parent"
+        android:fillViewport="true">
 
-        <TextView
-            android:id="@+id/textViewStoryContent"
+        <LinearLayout
+            android:id="@+id/linearLayoutResultsContainer"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:lineSpacingMultiplier="1.2"
-            android:textAppearance="@style/TextAppearance.AppCompat.Body1"
-            android:textColor="@android:color/black" 
-            android:textSize="18sp"
-            tools:text="This is a long story sentence for the user to read aloud. It might span multiple lines and contain various punctuation marks like commas, periods, and even quotes like &quot;this&quot;." />
+            android:orientation="vertical" />
+
     </ScrollView>
 
     <ImageButton
