@@ -26,8 +26,11 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
 import androidx.core.content.res.ResourcesCompat
+import androidx.core.view.MenuHost
+import androidx.core.view.MenuProvider
 import androidx.fragment.app.Fragment
 import androidx.fragment.app.activityViewModels
+import androidx.lifecycle.Lifecycle
 import androidx.navigation.fragment.findNavController
 import com.example.realtalkenglishwithAI.R
 import com.example.realtalkenglishwithAI.databinding.FragmentStoryReadingBinding
@@ -42,6 +45,7 @@ import java.io.FileOutputStream
 import java.io.IOException
 import kotlin.concurrent.thread
 import kotlin.math.max
+import kotlin.math.min
 
 class StoryReadingFragment : Fragment() {
 
@@ -70,16 +74,14 @@ class StoryReadingFragment : Fragment() {
 
     // Colors for text spans
     private var colorDefaultText: Int = Color.BLACK // Fallback
-    private var colorTemporaryHighlight: Int = Color.LTGRAY // Fallback
     private var colorCorrectWord: Int = Color.GREEN // Fallback
     private var colorIncorrectWord: Int = Color.RED // Fallback
 
-    // Colors for FABs - to be initialized in onViewCreated or onCreate
+    // Colors for FABs
     private var fabWhiteColor: Int = Color.WHITE
     private var fabGrayColor: Int = Color.GRAY
     private var fabBlackColor: Int = Color.BLACK
     private var fabRedColor: Int = Color.RED
-
 
     private data class WordInfo(
         val originalText: String,
@@ -93,7 +95,6 @@ class StoryReadingFragment : Fragment() {
 
     private val sentenceTextViews = mutableListOf<TextView>()
     private val allWordInfosInStory = mutableListOf<WordInfo>()
-    private var currentHighlightedWordIndex = -1
 
     private val requestPermissionLauncher =
         registerForActivityResult(ActivityResultContracts.RequestPermission()) { isGranted: Boolean ->
@@ -124,11 +125,10 @@ class StoryReadingFragment : Fragment() {
 
         val pcmPath = "${requireContext().externalCacheDir?.absolutePath}/story_sentence_audio.pcm"
         pcmFile = File(pcmPath)
-        setHasOptionsMenu(true)
+        // setHasOptionsMenu(true) // Removed for new MenuProvider API
 
         context?.let { ctx ->
             colorDefaultText = ContextCompat.getColor(ctx, android.R.color.black)
-            colorTemporaryHighlight = ContextCompat.getColor(ctx, R.color.gray_500)
             colorCorrectWord = ContextCompat.getColor(ctx, R.color.blue_500)
             colorIncorrectWord = ContextCompat.getColor(ctx, R.color.red_500)
 
@@ -146,7 +146,6 @@ class StoryReadingFragment : Fragment() {
         _binding = FragmentStoryReadingBinding.inflate(inflater, container, false)
         if (context != null && colorDefaultText == Color.BLACK) { 
             colorDefaultText = ContextCompat.getColor(requireContext(), android.R.color.black)
-            colorTemporaryHighlight = ContextCompat.getColor(requireContext(), R.color.gray_500)
             colorCorrectWord = ContextCompat.getColor(requireContext(), R.color.blue_500)
             colorIncorrectWord = ContextCompat.getColor(requireContext(), R.color.red_500)
 
@@ -161,6 +160,8 @@ class StoryReadingFragment : Fragment() {
     override fun onViewCreated(view: View, savedInstanceState: Bundle?) {
         super.onViewCreated(view, savedInstanceState)
         setupToolbar()
+        setupMenu()
+
         currentStoryContent?.let {
             if (isAdded && _binding != null) {
                 displayInitialStoryContent(it, binding.linearLayoutResultsContainer)
@@ -174,6 +175,33 @@ class StoryReadingFragment : Fragment() {
         val modelReady = voskModelViewModel.modelState.value == ModelState.READY && voskModelViewModel.voskModel != null
         val canPlayPcm = pcmFile?.exists() == true && pcmFile!!.length() > 0L
         updateFabStates(modelReady, canPlayPcm)
+    }
+
+    private fun setupMenu() {
+        val menuHost: MenuHost = requireActivity()
+        menuHost.addMenuProvider(object : MenuProvider {
+            override fun onCreateMenu(menu: Menu, menuInflater: MenuInflater) {
+                menuInflater.inflate(R.menu.story_reading_menu, menu)
+            }
+
+            override fun onMenuItemSelected(menuItem: MenuItem): Boolean {
+                return when (menuItem.itemId) {
+                    android.R.id.home -> {
+                        if (isAdded && view != null) { // Check view as well for NavController
+                            findNavController().navigateUp()
+                        }
+                        true
+                    }
+                    R.id.action_play_story_audio -> {
+                        if (isAdded) { 
+                            Toast.makeText(requireContext(), "Play story audio clicked (Not implemented yet)", Toast.LENGTH_SHORT).show()
+                        }
+                        true
+                    }
+                    else -> false
+                }
+            }
+        }, viewLifecycleOwner, Lifecycle.State.RESUMED)
     }
 
     private fun updateFabStates(modelReady: Boolean, canPlayPcm: Boolean) {
@@ -217,7 +245,6 @@ class StoryReadingFragment : Fragment() {
         container.removeAllViews()
         sentenceTextViews.clear()
         allWordInfosInStory.clear()
-        currentHighlightedWordIndex = -1
 
         val sentences = storyText.split(Regex("(?<=[.!?;:])\\s+")).filter { it.isNotBlank() }
         sentences.forEachIndexed { sentenceIdx, sentenceStr ->
@@ -261,14 +288,11 @@ class StoryReadingFragment : Fragment() {
     private fun clearAllSpansFromTextViews() {
         if (!isAdded || !viewLifecycleOwner.lifecycle.currentState.isAtLeast(androidx.lifecycle.Lifecycle.State.STARTED)) return
         try {
-            sentenceTextViews.forEach { tv ->
-                val spannable = tv.text as? SpannableString ?: SpannableString(tv.text)
-                val spans = spannable.getSpans(0, spannable.length, ForegroundColorSpan::class.java)
-                spans.forEach { spannable.removeSpan(it) }
-                tv.text = spannable
-                tv.setTextColor(colorDefaultText)
+            allWordInfosInStory.forEach { wordInfo ->
+                 if (wordInfo.sentenceIndex < sentenceTextViews.size) {
+                    updateWordSpan(wordInfo, colorDefaultText) // Reset to default
+                }
             }
-            allWordInfosInStory.forEach { it.currentSpan = null }
         } catch (e: Exception) {
             Log.e(TAG, "Error in clearAllSpansFromTextViews", e)
         }
@@ -290,52 +314,66 @@ class StoryReadingFragment : Fragment() {
                 Spannable.SPAN_EXCLUSIVE_EXCLUSIVE
             )
             wordInfo.currentSpan = newSpan
-            tv.text = spannable
+            if (tv.text.toString() != spannable.toString() || color != tv.currentTextColor) {
+                 tv.text = spannable // Avoid re-setting if text and color are same
+            }
+            if (color == colorDefaultText) tv.setTextColor(colorDefaultText) // Ensure default is applied correctly
+
         } catch (e: Exception) {
             Log.e(TAG, "Error applying span to \'${wordInfo.originalText}\' at [${wordInfo.startCharInSentence}-${wordInfo.endCharInSentence}] in sentence of length ${spannable.length}", e)
         }
     }
 
-    private fun applyTemporaryHighlights(partialTranscript: String) {
+    private fun applyRealtimeWordHighlighting(partialTranscript: String) {
         if (!isAdded || _binding == null || !viewLifecycleOwner.lifecycle.currentState.isAtLeast(androidx.lifecycle.Lifecycle.State.STARTED)) return
 
-        val partialWords = partialTranscript.split(Regex("\\s+")).map { normalizeToken(it) }.filter { it.isNotEmpty() }
+        val recognizedWords = partialTranscript.trim().split(Regex("\\s+"))
+            .map { normalizeToken(it) }
+            .filter { it.isNotBlank() }
 
-        for(i in 0 until allWordInfosInStory.size){
-             if(allWordInfosInStory[i].currentSpan?.foregroundColor == colorTemporaryHighlight || allWordInfosInStory[i].currentSpan?.foregroundColor == colorDefaultText ) { 
-                updateWordSpan(allWordInfosInStory[i], colorDefaultText)
-             }
-        }
-
-        if (partialWords.isEmpty()) {
-            currentHighlightedWordIndex = -1
+        if (recognizedWords.isEmpty()) {
+            allWordInfosInStory.forEach {
+                if (it.currentSpan?.foregroundColor != colorDefaultText) { // Only update if not already default
+                    updateWordSpan(it, colorDefaultText)
+                }
+            }
             return
         }
 
-        var storyWordIdx = 0
-        var partialWordIdx = 0
-        var lastSuccessfullyMatchedStoryWordGlobalIndex = -1
+        var recWordIdx = 0 // Current index in recognizedWords we are trying to match
 
-        while (storyWordIdx < allWordInfosInStory.size && partialWordIdx < partialWords.size) {
-            val storyWordInfo = allWordInfosInStory[storyWordIdx]
-            val partialWord = partialWords[partialWordIdx]
+        allWordInfosInStory.forEach { storyWordInfo ->
+            var matched = false
+            if (recWordIdx < recognizedWords.size) {
+                var bestMatchInWindowRecIdx = -1
+                var minDistanceInWindow = REALTIME_HIGHLIGHT_MAX_DISTANCE + 1
 
-            if (storyWordInfo.normalizedText == partialWord) {
-                if (storyWordInfo.currentSpan?.foregroundColor != colorCorrectWord && storyWordInfo.currentSpan?.foregroundColor != colorIncorrectWord) {
-                     updateWordSpan(storyWordInfo, colorTemporaryHighlight)
+                val windowEnd = min(recWordIdx + REALTIME_HIGHLIGHT_WINDOW_SIZE, recognizedWords.size)
+                for (k in recWordIdx until windowEnd) {
+                    val distance = levenshtein(storyWordInfo.normalizedText, recognizedWords[k])
+                    if (distance < minDistanceInWindow) {
+                        minDistanceInWindow = distance
+                        if (distance <= REALTIME_HIGHLIGHT_MAX_DISTANCE) {
+                            bestMatchInWindowRecIdx = k
+                        }
+                    }
+                    if (distance == 0) { // Perfect match, can break early
+                        bestMatchInWindowRecIdx = k
+                        break
+                    }
                 }
-                lastSuccessfullyMatchedStoryWordGlobalIndex = storyWordIdx
-                partialWordIdx++
-            } else {
-                if (storyWordInfo.currentSpan?.foregroundColor == colorCorrectWord || storyWordInfo.currentSpan?.foregroundColor == colorIncorrectWord) {
-                    storyWordIdx++
-                    continue
+
+                if (bestMatchInWindowRecIdx != -1) { // A match was found within the window
+                    updateWordSpan(storyWordInfo, colorCorrectWord)
+                    recWordIdx = bestMatchInWindowRecIdx + 1 // Advance recWordIdx past the matched word
+                    matched = true
                 }
-                break 
             }
-            storyWordIdx++
+
+            if (!matched) {
+                updateWordSpan(storyWordInfo, colorIncorrectWord)
+            }
         }
-        currentHighlightedWordIndex = lastSuccessfullyMatchedStoryWordGlobalIndex
     }
 
     private fun setupToolbar() {
@@ -366,24 +404,7 @@ class StoryReadingFragment : Fragment() {
         }
     }
 
-    override fun onCreateOptionsMenu(menu: Menu, inflater: MenuInflater) {
-        inflater.inflate(R.menu.story_reading_menu, menu)
-        super.onCreateOptionsMenu(menu, inflater)
-    }
-
-    override fun onOptionsItemSelected(item: MenuItem): Boolean {
-        return when (item.itemId) {
-            android.R.id.home -> {
-                if (isAdded) findNavController().navigateUp()
-                true
-            }
-            R.id.action_play_story_audio -> {
-                if (isAdded) Toast.makeText(requireContext(), "Play story audio clicked (Not implemented yet)", Toast.LENGTH_SHORT).show()
-                true
-            }
-            else -> super.onOptionsItemSelected(item)
-        }
-    }
+    // Removed onCreateOptionsMenu and onOptionsItemSelected for new MenuProvider API
 
     private fun setupClickListeners() {
         binding.buttonRecordStorySentence.setOnClickListener {
@@ -443,8 +464,7 @@ class StoryReadingFragment : Fragment() {
 
         pcmFile?.delete()
         binding.textViewSentenceScore.visibility = View.GONE
-        clearAllSpansFromTextViews()
-        currentHighlightedWordIndex = -1
+        clearAllSpansFromTextViews() // Crucial for resetting highlights
 
         try {
             val minBufferSize = AudioRecord.getMinBufferSize(sampleRate, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT)
@@ -486,7 +506,11 @@ class StoryReadingFragment : Fragment() {
                                 if (localProducerRecognizer.acceptWaveForm(audioBuffer, readResult)) {
                                     val partialJson = localProducerRecognizer.partialResult
                                     val partialText = JSONObject(partialJson).optString("partial", "")
-                                    activity?.runOnUiThread { if (isAdded && _binding != null && isRecording) { applyTemporaryHighlights(partialText) } }
+                                    activity?.runOnUiThread { 
+                                        if (isAdded && _binding != null && isRecording) { 
+                                            applyRealtimeWordHighlighting(partialText) 
+                                        }
+                                    }
                                 }
                             } catch (e: Exception) { Log.e(TAG, "Producer: Recognizer.acceptWaveForm/partialResult failed", e); break }
                         } else if (readResult < 0) { Log.e(TAG, "Producer: AudioRecord read error: $readResult"); break }
@@ -512,7 +536,7 @@ class StoryReadingFragment : Fragment() {
     private fun stopRecordingInternal(processAudio: Boolean) {
         if (!isRecording && audioRecord == null && recordingThread == null && fileOutputStream == null) {
             Log.d(TAG, "stopRecordingInternal called but already stopped or not started properly.")
-            if (isRecording) isRecording = false // Ensure isRecording is false
+            if (isRecording) isRecording = false 
             val modelRdy = voskModelViewModel.modelState.value == ModelState.READY && voskModelViewModel.voskModel != null
             val canPly = pcmFile?.exists() == true && pcmFile!!.length() > 0L
             updateFabStates(modelRdy, canPly)
@@ -520,7 +544,7 @@ class StoryReadingFragment : Fragment() {
         }
         isRecording = false
         val modelReady = voskModelViewModel.modelState.value == ModelState.READY && voskModelViewModel.voskModel != null
-        updateFabStates(modelReady, pcmFile?.exists() == true && pcmFile!!.length() > 0L) // Update immediately after isRecording changes
+        updateFabStates(modelReady, pcmFile?.exists() == true && pcmFile!!.length() > 0L) 
 
         try {
             recordingThread?.join(1500)
@@ -540,12 +564,15 @@ class StoryReadingFragment : Fragment() {
 
         if (processAudio && pcmFilePlayable) {
             if (isAdded) Toast.makeText(requireContext(), "Processing final result...", Toast.LENGTH_SHORT).show()
-            startPostProcessingThreadUsingNewRecognizer(pcmToProcess!!, targetSentenceForScoring) // pcmToProcess is not null here
+            startPostProcessingThreadUsingNewRecognizer(pcmToProcess!!, targetSentenceForScoring) 
         } else {
-            if (processAudio) { // but pcmFilePlayable was false
+            if (processAudio) { 
                 if (isAdded) Toast.makeText(requireContext(), "Recording was empty or invalid.", Toast.LENGTH_SHORT).show()
             }
-            clearAllSpansFromTextViews()
+            // If not processing audio (e.g. user cancelled, or pcm invalid), clear realtime highlights to default
+            if (isAdded && viewLifecycleOwner.lifecycle.currentState.isAtLeast(androidx.lifecycle.Lifecycle.State.STARTED)) {
+                 allWordInfosInStory.forEach { updateWordSpan(it, colorDefaultText) } 
+            }
             activity?.runOnUiThread { 
                  val modelRdyNow = voskModelViewModel.modelState.value == ModelState.READY && voskModelViewModel.voskModel != null
                  updateFabStates(modelRdyNow, false)
@@ -562,7 +589,7 @@ class StoryReadingFragment : Fragment() {
                 if (isAdded) Toast.makeText(requireContext(), "Speech model unavailable for processing.", Toast.LENGTH_LONG).show()
                 val modelRdy = voskModelViewModel.modelState.value == ModelState.READY && voskModelViewModel.voskModel != null
                 updateFabStates(modelRdy, false)
-                clearAllSpansFromTextViews()
+                allWordInfosInStory.forEach { updateWordSpan(it, colorDefaultText) }
             }
             return
         }
@@ -578,19 +605,36 @@ class StoryReadingFragment : Fragment() {
                     val buffer = ByteArray(4096)
                     var bytesRead: Int
                     while (fis.read(buffer).also { bytesRead = it } > 0) {
-                        if (!postProcessRecognizer.acceptWaveForm(buffer, bytesRead)) break 
+                        if (!postProcessRecognizer.acceptWaveForm(buffer, bytesRead)) {
+                            // Potentially stop if acceptWaveForm returns false, indicating an issue or end of segment
+                            break 
+                        }
                     }
                 }
-                voskJsonResult = postProcessRecognizer.finalResult
+                // Add silence padding before getting the final result
+                try {
+                    val silenceDurationMs = 300 // Duration of silence in milliseconds
+                    val numSamplesSilence = (sampleRate * silenceDurationMs / 1000)
+                    val silenceBytes = ByteArray(numSamplesSilence * 2) // For 16-bit PCM (2 bytes per sample)
+                    if (silenceBytes.isNotEmpty()) {
+                        postProcessRecognizer?.acceptWaveForm(silenceBytes, silenceBytes.size)
+                    }
+                    voskJsonResult = postProcessRecognizer?.finalResult
+                } catch (e: Exception) {
+                    Log.e(TAG, "Error during final result or silence padding: ${e.message}")
+                    // voskJsonResult will remain null if an error occurs here
+                }
             } catch (e: Exception) {
-                Log.e(TAG, "Post-processing thread failed", e)
+                Log.e(TAG, "Post-processing thread failed during audio feed: ${e.message}")
             } finally {
                 postProcessRecognizer?.close()
             }
 
             activity?.runOnUiThread {
                 if (!isAdded || _binding == null || !viewLifecycleOwner.lifecycle.currentState.isAtLeast(androidx.lifecycle.Lifecycle.State.STARTED)) return@runOnUiThread
-                clearAllSpansFromTextViews()
+                // Clear previous (realtime) spans before applying final ones
+                allWordInfosInStory.forEach { updateWordSpan(it, colorDefaultText) }
+
                 val modelRdy = voskModelViewModel.modelState.value == ModelState.READY && voskModelViewModel.voskModel != null
 
                 if (voskJsonResult != null) {
@@ -614,7 +658,7 @@ class StoryReadingFragment : Fragment() {
             if (evalIdx < evaluations.size) {
                 val evalWord = evaluations[evalIdx]
                 if (storyWordInfo.normalizedText == normalizeToken(evalWord.targetWord) ||
-                    levenshtein(storyWordInfo.normalizedText, normalizeToken(evalWord.targetWord)) <= 1) {
+                    levenshtein(storyWordInfo.normalizedText, normalizeToken(evalWord.targetWord)) <= 1) { // Allow slight difference for matching target
                     chosenScore = evalWord.score
                     evalIdx++
                 } 
@@ -683,11 +727,9 @@ class StoryReadingFragment : Fragment() {
             currentAudioTrack?.play()
             Toast.makeText(requireContext(), "Playing recording...", Toast.LENGTH_SHORT).show()
             
-            // Update FAB state for playback
             val modelRdy = voskModelViewModel.modelState.value == ModelState.READY && voskModelViewModel.voskModel != null
-            // Temporarily disable play button during playback by setting canPlayPcm to false in updateFabStates
-            updateFabStates(modelRdy, false) // isRecording is false here
-            binding.buttonPlayUserSentenceRecording.alpha = 0.5f // Explicitly dim if needed
+            updateFabStates(modelRdy, false) 
+            binding.buttonPlayUserSentenceRecording.alpha = 0.5f 
 
             playbackThread = thread(start = true, name = "PcmPlaybackThread") {
                 try {
@@ -737,6 +779,8 @@ class StoryReadingFragment : Fragment() {
         private const val ARG_STORY_CONTENT = "story_content"
         private const val ARG_STORY_TITLE = "story_title"
         private const val TAG = "StoryReadingFragment"
+        private const val REALTIME_HIGHLIGHT_WINDOW_SIZE = 3
+        private const val REALTIME_HIGHLIGHT_MAX_DISTANCE = 1
 
         @JvmStatic
         fun newInstance(storyTitle: String, storyContent: String) = StoryReadingFragment().apply {
