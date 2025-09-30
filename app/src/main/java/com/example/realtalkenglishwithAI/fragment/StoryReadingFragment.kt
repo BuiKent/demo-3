@@ -7,7 +7,6 @@ import android.graphics.Color
 import android.graphics.Typeface
 import android.media.AudioFormat
 import android.media.AudioRecord
-import android.media.MediaPlayer
 import android.media.MediaRecorder
 import android.os.Bundle
 import android.text.Spannable
@@ -25,6 +24,10 @@ import androidx.core.content.ContextCompat
 import androidx.core.content.res.ResourcesCompat
 import androidx.fragment.app.Fragment
 import androidx.fragment.app.activityViewModels
+import androidx.media3.common.MediaItem
+import androidx.media3.common.PlaybackException
+import androidx.media3.common.Player
+import androidx.media3.exoplayer.ExoPlayer
 import androidx.navigation.fragment.findNavController
 import com.example.realtalkenglishwithAI.R
 import com.example.realtalkenglishwithAI.databinding.FragmentStoryReadingBinding
@@ -62,32 +65,29 @@ class StoryReadingFragment : Fragment() {
     private val sampleRate = 16000
     private var bufferSize: Int = 0
 
-    private var recognizer: Recognizer? = null
-    private var targetSentenceForScoring: String = "" // Should be the full story content
+    private var currentSessionRecognizer: Recognizer? = null // Changed from recognizer
+    private var targetSentenceForScoring: String = ""
 
-    private var mediaPlayer: MediaPlayer? = null
+    private var exoPlayer: ExoPlayer? = null
 
-    // --- Colors ---
     private var colorDefaultText: Int = Color.BLACK
     private var colorTemporaryHighlight: Int = Color.LTGRAY
     private var colorCorrectWord: Int = Color.GREEN
     private var colorIncorrectWord: Int = Color.RED
 
-    // --- Word and Sentence Tracking ---
     private data class WordInfo(
         val originalText: String,
         val normalizedText: String,
         val sentenceIndex: Int,
-        val wordIndexInSentence: Int, // Index of this word within its sentence
-        val startCharInSentence: Int, // Start char index of this word in its original sentence text
-        val endCharInSentence: Int,   // End char index of this word in its original sentence text
-        var currentSpan: ForegroundColorSpan? = null // To manage removing specific spans if needed
+        val wordIndexInSentence: Int,
+        val startCharInSentence: Int,
+        val endCharInSentence: Int,
+        var currentSpan: ForegroundColorSpan? = null
     )
 
     private val sentenceTextViews = mutableListOf<TextView>()
     private val allWordInfosInStory = mutableListOf<WordInfo>()
-    private var currentHighlightedWordIndex = -1 // Tracks the last word highlighted by partial result
-
+    private var currentHighlightedWordIndex = -1
 
     private val requestPermissionLauncher =
         registerForActivityResult(ActivityResultContracts.RequestPermission()) { isGranted: Boolean ->
@@ -112,8 +112,7 @@ class StoryReadingFragment : Fragment() {
 
         setHasOptionsMenu(true)
 
-        // Initialize colors from resources
-        colorDefaultText = ContextCompat.getColor(requireContext(), android.R.color.black) // Or your specific default text color
+        colorDefaultText = ContextCompat.getColor(requireContext(), android.R.color.black)
         colorTemporaryHighlight = ContextCompat.getColor(requireContext(), R.color.gray_500)
         colorCorrectWord = ContextCompat.getColor(requireContext(), R.color.blue_500)
         colorIncorrectWord = ContextCompat.getColor(requireContext(), R.color.red_500)
@@ -131,14 +130,13 @@ class StoryReadingFragment : Fragment() {
         super.onViewCreated(view, savedInstanceState)
         setupToolbar()
         currentStoryContent?.let {
-            if (isAdded && _binding != null) { 
+            if (isAdded && _binding != null) {
                 displayInitialStoryContent(it, binding.linearLayoutResultsContainer)
             }
         }
-        Log.d(TAG, "Story Title: $currentStoryTitle, Story Content: $currentStoryContent")
         setupClickListeners()
         observeVoskModelStatus()
-        binding.textViewPartialTranscript.visibility = View.GONE 
+        binding.textViewPartialTranscript.visibility = View.GONE
     }
 
     private fun displayInitialStoryContent(storyText: String, container: LinearLayout) {
@@ -149,10 +147,9 @@ class StoryReadingFragment : Fragment() {
         currentHighlightedWordIndex = -1
 
         val sentences = storyText.split(Regex("(?<=[.!?;:])\\s+")).filter { it.isNotBlank() }
-        var globalWordCounter = 0
         sentences.forEachIndexed { sentenceIdx, sentenceStr ->
             val tv = TextView(requireContext()).apply {
-                text = SpannableString(sentenceStr) // Use SpannableString from the start
+                text = SpannableString(sentenceStr)
                 setTextSize(TypedValue.COMPLEX_UNIT_SP, 18f)
                 setTextColor(colorDefaultText)
                 setPadding(4, 8, 4, 8)
@@ -179,10 +176,9 @@ class StoryReadingFragment : Fragment() {
                                 endCharInSentence = originalWordEnd
                             )
                         )
-                        currentWordStartChar = originalWordEnd // Important: Update for next search in sentence
-                        globalWordCounter++
+                        currentWordStartChar = originalWordEnd
                     } else {
-                        Log.w(TAG, "Word '$word' not found in sentence '$sentenceStr' starting from char $currentWordStartChar")
+                        Log.w(TAG, "Word '$word' not found in sentence '$sentenceStr' from char $currentWordStartChar")
                     }
                 }
             }
@@ -190,22 +186,22 @@ class StoryReadingFragment : Fragment() {
     }
 
     private fun clearAllSpansFromTextViews() {
-        if (!isAdded) return
+        if (!isAdded || !viewLifecycleOwner.lifecycle.currentState.isAtLeast(androidx.lifecycle.Lifecycle.State.STARTED)) return
         sentenceTextViews.forEach { tv ->
             val spannable = tv.text as? SpannableString ?: SpannableString(tv.text)
             val spans = spannable.getSpans(0, spannable.length, ForegroundColorSpan::class.java)
             spans.forEach { spannable.removeSpan(it) }
-            tv.text = spannable // Re-assign to reflect span removal
-            tv.setTextColor(colorDefaultText) // Ensure default color if spans are just removed
+            tv.text = spannable
+            tv.setTextColor(colorDefaultText)
         }
         allWordInfosInStory.forEach { it.currentSpan = null }
     }
 
     private fun updateWordSpan(wordInfo: WordInfo, color: Int) {
-        if (!isAdded || wordInfo.sentenceIndex >= sentenceTextViews.size) return
+        if (!isAdded || !viewLifecycleOwner.lifecycle.currentState.isAtLeast(androidx.lifecycle.Lifecycle.State.STARTED) || wordInfo.sentenceIndex >= sentenceTextViews.size) return
         val tv = sentenceTextViews[wordInfo.sentenceIndex]
         val spannable = tv.text as? SpannableString ?: SpannableString(tv.text)
-        
+
         wordInfo.currentSpan?.let { spannable.removeSpan(it) }
 
         val newSpan = ForegroundColorSpan(color)
@@ -217,24 +213,22 @@ class StoryReadingFragment : Fragment() {
                 Spannable.SPAN_EXCLUSIVE_EXCLUSIVE
             )
             wordInfo.currentSpan = newSpan
-            tv.text = spannable 
+            tv.text = spannable
         } catch (e: Exception) {
-            Log.e(TAG, "Error applying span to '${wordInfo.originalText}' at [${wordInfo.startCharInSentence}-${wordInfo.endCharInSentence}] in sentence ${wordInfo.sentenceIndex}", e)
+            Log.e(TAG, "Error applying span to '${wordInfo.originalText}' at [${wordInfo.startCharInSentence}-${wordInfo.endCharInSentence}]", e)
         }
     }
 
     private fun applyTemporaryHighlights(partialTranscript: String) {
-        if (!isAdded || _binding == null) return
+        if (!isAdded || _binding == null || !viewLifecycleOwner.lifecycle.currentState.isAtLeast(androidx.lifecycle.Lifecycle.State.STARTED)) return
 
         val partialWords = partialTranscript.split(Regex("\\s+")).map { normalizeToken(it) }.filter { it.isNotEmpty() }
-        
-        // Clear previous temporary highlights before applying new ones
+
         for (i in 0..currentHighlightedWordIndex) {
             if (i < allWordInfosInStory.size) {
-                updateWordSpan(allWordInfosInStory[i], colorDefaultText) // Reset to default
+                updateWordSpan(allWordInfosInStory[i], colorDefaultText)
             }
         }
-        // If partial is empty, reset all and return
         if (partialWords.isEmpty()) {
             currentHighlightedWordIndex = -1
             return
@@ -253,9 +247,7 @@ class StoryReadingFragment : Fragment() {
                 lastSuccessfullyMatchedStoryWordGlobalIndex = storyWordIdx
                 partialWordIdx++
             } else {
-                // If there's a mismatch, stop highlighting further for this partial result.
-                // We only highlight a continuous sequence from the beginning of the story.
-                break 
+                break
             }
             storyWordIdx++
         }
@@ -319,48 +311,27 @@ class StoryReadingFragment : Fragment() {
     private fun observeVoskModelStatus() {
         voskModelViewModel.modelState.observe(viewLifecycleOwner) { state ->
             Log.d(TAG, "VoskModelViewModel state changed: $state")
-            if (state == ModelState.READY && voskModelViewModel.voskModel != null) {
-                if (recognizer == null) {
-                    try {
-                        voskModelViewModel.voskModel?.let {
-                            // val grammar = "[\"one two three four five six seven eight nine ten\", \"hello world\"]"
-                            // recognizer = Recognizer(it, sampleRate.toFloat(), grammar)
-                            recognizer = Recognizer(it, sampleRate.toFloat())
-                            Log.i(TAG, "Vosk Recognizer initialized for StoryReadingFragment.")
-                        } ?: run {
-                            Log.e(TAG, "Vosk model is null when state is READY.")
-                        }
-                    } catch (e: Exception) {
-                        Log.e(TAG, "Failed to initialize Vosk Recognizer", e)
-                        Toast.makeText(requireContext(), "Speech recognizer init failed.", Toast.LENGTH_SHORT).show()
-                        recognizer = null
-                    }
-                }
-            } else {
-                if (recognizer != null) {
-                    recognizer?.close()
-                    recognizer = null
-                    Log.i(TAG, "Vosk Recognizer released.")
-                }
-            }
+            // Removed recognizer initialization/closing logic from here
             updateUIForVoskModelState(state)
         }
     }
 
     private fun updateUIForVoskModelState(state: ModelState) {
         if (!isAdded || _binding == null) return
-        val modelIsReadyForUse = state == ModelState.READY && voskModelViewModel.voskModel != null && recognizer != null
+        // Check against model availability directly
+        val modelIsReadyForUse = state == ModelState.READY && voskModelViewModel.voskModel != null
         binding.buttonRecordStorySentence.isEnabled = modelIsReadyForUse
         binding.buttonRecordStorySentence.alpha = if (modelIsReadyForUse) 1.0f else 0.5f
         if (!modelIsReadyForUse && isRecording) {
-            stopRecordingInternal(false)
+            stopRecordingInternal(false) // Stop recording if model becomes not ready
         }
     }
 
     private fun handleRecordAction() {
         if (!isAdded || _binding == null) return
-        if (voskModelViewModel.modelState.value != ModelState.READY || voskModelViewModel.voskModel == null || recognizer == null) {
-            Toast.makeText(requireContext(), "Speech engine not ready. Please wait.", Toast.LENGTH_SHORT).show()
+        // Check model readiness directly
+        if (voskModelViewModel.modelState.value != ModelState.READY || voskModelViewModel.voskModel == null) {
+            Toast.makeText(requireContext(), "Speech engine not ready. Please wait or check model.", Toast.LENGTH_SHORT).show()
             return
         }
         if (ContextCompat.checkSelfPermission(requireContext(), Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) {
@@ -376,119 +347,207 @@ class StoryReadingFragment : Fragment() {
 
     private fun startRecordingInternal() {
         if (targetSentenceForScoring.isBlank()) {
-            Toast.makeText(requireContext(), "No story text to record.", Toast.LENGTH_SHORT).show()
+            Toast.makeText(requireContext(), "No story text to record.", Toast.LENGTH_SHORT).show(); return
+        }
+
+        val currentModel = voskModelViewModel.voskModel
+        if (currentModel == null) {
+            Toast.makeText(requireContext(), "Speech model not available. Please wait.", Toast.LENGTH_SHORT).show()
             return
         }
+
+        try {
+            currentSessionRecognizer?.close() // Ensure any previous session's recognizer is closed
+            currentSessionRecognizer = Recognizer(currentModel, sampleRate.toFloat())
+            Log.i(TAG, "New Recognizer instance created for the session.")
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to create new Recognizer instance", e)
+            Toast.makeText(requireContext(), "Failed to initialize speech recognizer for session.", Toast.LENGTH_LONG).show()
+            currentSessionRecognizer = null
+            return // Stop if recognizer creation fails
+        }
+
         pcmFile?.delete()
         wavFileForPlayback?.delete()
-        binding.textViewSentenceScore.visibility = View.GONE 
+        binding.textViewSentenceScore.visibility = View.GONE
         binding.textViewPartialTranscript.text = "Đang nghe..."
         binding.textViewPartialTranscript.visibility = View.VISIBLE
 
-        clearAllSpansFromTextViews() // Reset all words to default color
-        currentHighlightedWordIndex = -1 // Reset highlight tracking
-        
+        clearAllSpansFromTextViews()
+        currentHighlightedWordIndex = -1
+
         binding.buttonPlayUserSentenceRecording.isEnabled = false
         binding.buttonPlayUserSentenceRecording.alpha = 0.5f
-        recognizer?.reset() 
+        // No recognizer.reset() needed as it's a new instance
 
         try {
             val minBufferSize = AudioRecord.getMinBufferSize(sampleRate, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT)
-            bufferSize = max(minBufferSize, 4096) 
+            bufferSize = max(minBufferSize, 4096)
             audioRecord = AudioRecord(MediaRecorder.AudioSource.MIC, sampleRate, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT, bufferSize * 2)
+
+            if (audioRecord?.state != AudioRecord.STATE_INITIALIZED) {
+                Log.e(TAG, "AudioRecord not initialized")
+                Toast.makeText(requireContext(), "AudioRecord initialization failed.", Toast.LENGTH_SHORT).show()
+                currentSessionRecognizer?.close() // Clean up newly created recognizer
+                currentSessionRecognizer = null
+                return
+            }
             fileOutputStream = FileOutputStream(pcmFile)
             audioRecord?.startRecording()
             isRecording = true
             updateRecordButtonUI()
             Toast.makeText(requireContext(), "Recording started...", Toast.LENGTH_SHORT).show()
+
+            val localRecognizerForThread = currentSessionRecognizer // Capture for thread safety
+
             recordingThread = thread(start = true, name = "StoryAudioProducer") {
                 android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_AUDIO)
-                val audioBuffer = ByteArray(bufferSize) 
+                val audioBuffer = ByteArray(bufferSize)
+
                 while (isRecording) {
-                    val readResult = audioRecord?.read(audioBuffer, 0, audioBuffer.size) ?: 0
+                    val currentAudioRecord = audioRecord
+                    // Use the local recognizer instance for this thread
+                    if (currentAudioRecord == null || localRecognizerForThread == null || !isRecording) break
+
+                    val readResult = currentAudioRecord.read(audioBuffer, 0, audioBuffer.size)
                     if (readResult > 0) {
                         try {
                             fileOutputStream?.write(audioBuffer, 0, readResult)
-                            if (recognizer?.acceptWaveForm(audioBuffer, readResult) == true) {
-                                val partialJson = recognizer?.partialResult
-                                try {
-                                    val jsonObject = JSONObject(partialJson)
-                                    val partialText = jsonObject.optString("partial", "")
-                                    activity?.runOnUiThread {
-                                        if (isAdded && _binding != null) {
-                                            binding.textViewPartialTranscript.text = partialText
-                                            applyTemporaryHighlights(partialText) 
-                                        }
+                            // Check if localRecognizerForThread is still valid (though it should be if loop continues based on isRecording)
+                            if (localRecognizerForThread.acceptWaveForm(audioBuffer, readResult)) {
+                                val partialJson = localRecognizerForThread.partialResult
+                                val jsonObject = JSONObject(partialJson)
+                                val partialText = jsonObject.optString("partial", "")
+                                activity?.runOnUiThread {
+                                    if (isAdded && _binding != null && isRecording) {
+                                        binding.textViewPartialTranscript.text = partialText
+                                        applyTemporaryHighlights(partialText)
                                     }
-                                } catch (e: Exception) {
-                                    Log.e(TAG, "Error parsing partial JSON: $partialJson", e)
                                 }
-                            } 
-                        } catch (e: IOException) {
-                            Log.e(TAG, "Error writing to PCM or processing partial result", e)
-                            break 
+                            }
+                        } catch (e: Exception) {
+                            Log.e(TAG, "Error in recording loop (writing/processing): ${e.message}", e)
+                            break
                         }
+                    } else if (readResult < 0) {
+                        Log.e(TAG, "AudioRecord read error: $readResult")
+                        activity?.runOnUiThread { stopRecordingInternal(false) } 
+                        break
                     }
                 }
+                Log.d(TAG, "StoryAudioProducer thread finished.")
             }
         } catch (e: Exception) {
             Log.e(TAG, "Recording setup/start failed", e)
             Toast.makeText(requireContext(), "Recording setup failed: ${e.message}", Toast.LENGTH_LONG).show()
             isRecording = false
             updateRecordButtonUI()
-            if(isAdded && _binding != null) {
-                binding.textViewPartialTranscript.text = ""
-                binding.textViewPartialTranscript.visibility = View.GONE
+            currentSessionRecognizer?.close() // Clean up recognizer if setup failed
+            currentSessionRecognizer = null
+            activity?.runOnUiThread {
+                if(isAdded && _binding != null) {
+                    binding.textViewPartialTranscript.text = ""
+                    binding.textViewPartialTranscript.visibility = View.GONE
+                }
             }
         }
     }
 
     private fun stopRecordingInternal(processAudio: Boolean) {
-        if (!isRecording && audioRecord == null) return 
-        isRecording = false 
+        if (!isRecording && audioRecord == null && recordingThread == null) {
+            Log.d(TAG, "stopRecordingInternal called but not in a recording state or already stopped.")
+            return
+        }
+        Log.d(TAG, "stopRecordingInternal - Setting isRecording to false.")
+        isRecording = false
+
         updateRecordButtonUI()
-        try { recordingThread?.join(500) } catch (e: InterruptedException) { Log.e(TAG, "Recording thread join interrupted", e) }
+
+        Log.d(TAG, "stopRecordingInternal - Joining recordingThread.")
+        try {
+            recordingThread?.join(1000)
+            if (recordingThread?.isAlive == true) {
+                Log.w(TAG, "Recording thread did not finish in time, interrupting.")
+                recordingThread?.interrupt()
+            }
+        } catch (e: InterruptedException) {
+            Log.e(TAG, "Recording thread join interrupted", e)
+            Thread.currentThread().interrupt()
+        }
         recordingThread = null
-        
-        audioRecord?.stopSafely()
-        audioRecord?.releaseSafely()
+        Log.d(TAG, "stopRecordingInternal - RecordingThread joined/handled.")
+
+        audioRecord?.let {
+            if (it.recordingState == AudioRecord.RECORDSTATE_RECORDING) {
+                try { it.stop() } catch (e: IllegalStateException) { Log.e(TAG, "AudioRecord.stop() failed", e) }
+            }
+            if (it.state == AudioRecord.STATE_INITIALIZED) {
+                 try { it.release() } catch (e: Exception) { Log.e(TAG, "AudioRecord.release() failed", e) }
+            }
+        }
         audioRecord = null
-        
-        fileOutputStream?.flushSafely()
-        fileOutputStream?.closeSafely()
+        Log.d(TAG, "stopRecordingInternal - AudioRecord stopped and released.")
+
+        try {
+            fileOutputStream?.flush()
+            fileOutputStream?.close()
+        } catch (e: IOException) {
+            Log.e(TAG, "FileOutputStream close/flush failed", e)
+        }
         fileOutputStream = null
-        
-        activity?.runOnUiThread { 
+        Log.d(TAG, "stopRecordingInternal - FileOutputStream closed.")
+
+        activity?.runOnUiThread {
             if(isAdded && _binding != null) {
                 binding.textViewPartialTranscript.text = ""
                 binding.textViewPartialTranscript.visibility = View.GONE
             }
         }
 
-        if (processAudio && pcmFile?.exists() == true && pcmFile!!.length() > 0) {
-            Toast.makeText(requireContext(), "Processing final result...", Toast.LENGTH_SHORT).show()
-            startPostProcessingThread(pcmFile!!, targetSentenceForScoring)
+        val recognizerForProcessing = currentSessionRecognizer
+        currentSessionRecognizer = null // Detach from class member, it will be closed in post-processing or GC'd
+
+        if (processAudio && pcmFile?.exists() == true && pcmFile!!.length() > 44) {
+            if (recognizerForProcessing != null) {
+                Toast.makeText(requireContext(), "Processing final result...", Toast.LENGTH_SHORT).show()
+                startPostProcessingThread(pcmFile!!, targetSentenceForScoring, recognizerForProcessing)
+            } else {
+                Log.e(TAG, "Recognizer was null when trying to start post processing after recording.")
+                Toast.makeText(requireContext(), "Error: Recognizer not available for processing.", Toast.LENGTH_SHORT).show()
+                binding.buttonPlayUserSentenceRecording.isEnabled = false
+                binding.buttonPlayUserSentenceRecording.alpha = 0.5f
+                clearAllSpansFromTextViews()
+            }
         } else if (processAudio) {
-            Toast.makeText(requireContext(), "Recording was empty or failed.", Toast.LENGTH_SHORT).show()
+            Toast.makeText(requireContext(), "Recording was empty or invalid.", Toast.LENGTH_SHORT).show()
             binding.buttonPlayUserSentenceRecording.isEnabled = false
             binding.buttonPlayUserSentenceRecording.alpha = 0.5f
-            clearAllSpansFromTextViews() 
+            clearAllSpansFromTextViews()
+            recognizerForProcessing?.close() // Close if not passed to post-processing and processAudio was true
         } else {
-            clearAllSpansFromTextViews() 
+            clearAllSpansFromTextViews()
+            recognizerForProcessing?.close() // Close if not processing audio at all
         }
+        Log.d(TAG, "stopRecordingInternal - Finished.")
     }
 
-    private fun startPostProcessingThread(currentPcmFile: File, fullStoryText: String) {
-        val currentRecognizer = recognizer 
-        if (currentRecognizer == null || voskModelViewModel.modelState.value != ModelState.READY) {
-            Toast.makeText(requireContext(), "Speech engine not ready for final processing.", Toast.LENGTH_SHORT).show()
+    // Changed last parameter name and added finally block to close recognizer
+    private fun startPostProcessingThread(currentPcmFile: File, fullStoryText: String, recognizerToProcess: Recognizer) {
+        if (voskModelViewModel.modelState.value != ModelState.READY && voskModelViewModel.voskModel == null) {
+            Toast.makeText(requireContext(), "Speech engine not ready (model state).", Toast.LENGTH_SHORT).show()
+            try {
+                 recognizerToProcess.close() // Close if model is not ready
+            } catch (e: Exception) {
+                Log.e(TAG, "Error closing recognizerToProcess in startPostProcessingThread when model not ready", e)
+            }
             return
         }
+
         thread(start = true, name = "StoryFinalProcessThread") {
             var voskJsonResult: String? = null
             var wavCreatedSuccessfully = false
             try {
-                voskJsonResult = currentRecognizer.finalResult
+                voskJsonResult = recognizerToProcess.finalResult
 
                 wavFileForPlayback?.let {
                     if (currentPcmFile.exists() && currentPcmFile.length() > 0) {
@@ -498,57 +557,66 @@ class StoryReadingFragment : Fragment() {
                                 FileInputStream(currentPcmFile).use { fisPcmForWav -> fisPcmForWav.copyTo(fosWav) }
                             }
                             wavCreatedSuccessfully = it.exists() && it.length() > 44
-                        } catch (e: Exception) { Log.e(TAG, "Error creating WAV file from PCM", e) }
+                        } catch (e: Exception) { Log.e(TAG, "Error creating WAV file", e) }
                     } else {
-                         Log.w(TAG, "PCM file for WAV creation is empty or does not exist.")
+                         Log.w(TAG, "PCM file for WAV is empty or not found.")
                     }
                 }
-            } catch (e: Exception) { Log.e(TAG, "Error in Vosk final processing or WAV creation", e) }
+            } catch (e: Exception) {
+                Log.e(TAG, "Error in Vosk finalResult or WAV creation within thread", e)
+            } finally {
+                try {
+                    recognizerToProcess.close()
+                    Log.i(TAG, "Recognizer instance closed in StoryFinalProcessThread.")
+                } catch (e: Exception) {
+                    Log.e(TAG, "Error closing recognizerToProcess in StoryFinalProcessThread finally block", e)
+                }
+            }
 
             activity?.runOnUiThread {
-                if (!isAdded || _binding == null) return@runOnUiThread
-                 clearAllSpansFromTextViews() // Clear temporary highlights before applying final colors
+                if (!isAdded || _binding == null || !viewLifecycleOwner.lifecycle.currentState.isAtLeast(androidx.lifecycle.Lifecycle.State.STARTED)) return@runOnUiThread
+                clearAllSpansFromTextViews()
 
                 if (voskJsonResult != null) {
+                    Log.d(TAG, "Vosk Final Result: $voskJsonResult")
                     val scoringResult = PronunciationScorer.scoreSentenceQuick(voskJsonResult, fullStoryText)
-                    renderFinalWordColors(scoringResult.evaluations) 
+                    renderFinalWordColors(scoringResult.evaluations)
                 } else {
                      Toast.makeText(requireContext(), "Could not get final speech result.", Toast.LENGTH_SHORT).show()
+                     Log.e(TAG, "Vosk Final Result was null.")
                 }
                 binding.buttonPlayUserSentenceRecording.isEnabled = wavCreatedSuccessfully
                 binding.buttonPlayUserSentenceRecording.alpha = if (wavCreatedSuccessfully) 1.0f else 0.5f
             }
         }
     }
-    
+
     private fun renderFinalWordColors(evaluations: List<PronunciationScorer.SentenceWordEvaluation>) {
-        if (!isAdded || _binding == null ) return
+        if (!isAdded || _binding == null || !viewLifecycleOwner.lifecycle.currentState.isAtLeast(androidx.lifecycle.Lifecycle.State.STARTED)) return
 
         var evalIdx = 0
         allWordInfosInStory.forEach { storyWordInfo ->
-            var chosenScore = 0 
-            var matched = false
-            // Attempt to match storyWordInfo with an evaluation word
+            var chosenScore = 0
+            // var matched = false // matched variable was not used
             if (evalIdx < evaluations.size) {
                 val evalWord = evaluations[evalIdx]
-                if (storyWordInfo.normalizedText == normalizeToken(evalWord.targetWord)) {
+                if (storyWordInfo.normalizedText == normalizeToken(evalWord.targetWord) ||
+                    levenshtein(storyWordInfo.normalizedText, normalizeToken(evalWord.targetWord)) <= 1) {
                     chosenScore = evalWord.score
                     evalIdx++
-                    matched = true
+                    // matched = true
                 } else {
-                    // Simple lookahead for insertions/deletions if texts don't match
                     if (evalIdx + 1 < evaluations.size) {
                         val nextEvalWord = evaluations[evalIdx + 1]
-                        if (storyWordInfo.normalizedText == normalizeToken(nextEvalWord.targetWord)) {
-                            // Current evalWord might be an insertion, skip it and use next one
+                        if (storyWordInfo.normalizedText == normalizeToken(nextEvalWord.targetWord) ||
+                            levenshtein(storyWordInfo.normalizedText, normalizeToken(nextEvalWord.targetWord)) <= 1) {
                             chosenScore = nextEvalWord.score
                             evalIdx += 2
-                            matched = true
+                            // matched = true
                         }
                     }
                 }
             }
-            // If not matched, it remains score 0 (incorrect)
             val colorToApply = if (chosenScore > 0) colorCorrectWord else colorIncorrectWord
             updateWordSpan(storyWordInfo, colorToApply)
         }
@@ -558,8 +626,10 @@ class StoryReadingFragment : Fragment() {
         val m = s1.length
         val n = s2.length
         val dp = Array(m + 1) { IntArray(n + 1) }
+
         for (i in 0..m) dp[i][0] = i
         for (j in 0..n) dp[0][j] = j
+
         for (i in 1..m) {
             for (j in 1..n) {
                 val cost = if (s1[i - 1].equals(s2[j - 1], ignoreCase = true)) 0 else 1
@@ -569,89 +639,101 @@ class StoryReadingFragment : Fragment() {
         return dp[m][n]
     }
 
-    private fun normalizeToken(s: String): String = 
-        s.lowercase().replace(Regex("[^a-z0-9']"), "")
+    private fun normalizeToken(s: String): String = s.lowercase().replace(Regex("[^a-z0-9']"), "")
 
     private fun playUserRecording() {
         if (wavFileForPlayback?.exists() != true || wavFileForPlayback!!.length() == 0L) {
             Toast.makeText(requireContext(), "No recording available.", Toast.LENGTH_SHORT).show()
             return
         }
-        mediaPlayer?.release()
-        mediaPlayer = MediaPlayer().apply {
-            try {
-                setDataSource(wavFileForPlayback!!.absolutePath)
-                prepareAsync()
-                setOnPreparedListener { mp -> mp.start() }
-                setOnCompletionListener { mp -> 
-                    mp.release()
-                    mediaPlayer = null
-                    Toast.makeText(context, "Playback finished.", Toast.LENGTH_SHORT).show()
+
+        exoPlayer?.release() // Release previous instance
+        exoPlayer = ExoPlayer.Builder(requireContext()).build().apply {
+            val mediaItem = MediaItem.fromUri(wavFileForPlayback!!.toURI().toString())
+            setMediaItem(mediaItem)
+            addListener(object : Player.Listener {
+                override fun onPlaybackStateChanged(playbackState: Int) {
+                    if (playbackState == Player.STATE_ENDED) {
+                        Toast.makeText(context, "Playback finished.", Toast.LENGTH_SHORT).show()
+                        this@apply.release() // Release player on completion
+                        exoPlayer = null
+                    }
                 }
-                setOnErrorListener { _, _, _ ->
+
+                override fun onPlayerError(error: PlaybackException) {
+                    Log.e(TAG, "ExoPlayer error: ", error)
                     Toast.makeText(context, "Error playing recording.", Toast.LENGTH_SHORT).show()
-                    mediaPlayer?.release()
-                    mediaPlayer = null
-                    true
+                    this@apply.release() // Release player on error
+                    exoPlayer = null
                 }
-                Toast.makeText(context, "Playing recording...", Toast.LENGTH_SHORT).show()
-            } catch (e: IOException) {
-                Log.e(TAG, "MediaPlayer setup failed", e)
-                Toast.makeText(context, "Cannot play recording.", Toast.LENGTH_SHORT).show()
-            }
+            })
+            prepare()
+            playWhenReady = true
         }
+        Toast.makeText(requireContext(), "Playing recording...", Toast.LENGTH_SHORT).show()
     }
 
     private fun updateRecordButtonUI() {
         if (!isAdded || _binding == null) return
         val icon = if (isRecording) R.drawable.ic_close else R.drawable.ic_mic
         binding.buttonRecordStorySentence.setImageResource(icon)
-        binding.buttonRecordStorySentence.isActivated = isRecording 
+        binding.buttonRecordStorySentence.isActivated = isRecording
     }
 
     private fun createWavHeader(dataSize: Int, sampleRate: Int, channels: Int, bitsPerSample: Int): ByteArray {
         val header = ByteArray(44)
-        val totalDataLen = dataSize + 36L 
+        val totalDataLen = dataSize + 36L
         val byteRate = (sampleRate * channels * bitsPerSample / 8).toLong()
         val blockAlign = (channels * bitsPerSample / 8).toShort()
+
         header[0] = 'R'.code.toByte(); header[1] = 'I'.code.toByte(); header[2] = 'F'.code.toByte(); header[3] = 'F'.code.toByte()
         header[4] = (totalDataLen and 0xff).toByte(); header[5] = ((totalDataLen shr 8) and 0xff).toByte(); header[6] = ((totalDataLen shr 16) and 0xff).toByte(); header[7] = ((totalDataLen shr 24) and 0xff).toByte()
         header[8] = 'W'.code.toByte(); header[9] = 'A'.code.toByte(); header[10] = 'V'.code.toByte(); header[11] = 'E'.code.toByte()
         header[12] = 'f'.code.toByte(); header[13] = 'm'.code.toByte(); header[14] = 't'.code.toByte(); header[15] = ' '.code.toByte()
-        header[16] = 16; header[17] = 0; header[18] = 0; header[19] = 0 
-        header[20] = 1; header[21] = 0 
-        header[22] = channels.toByte(); header[23] = 0 
+        header[16] = 16; header[17] = 0; header[18] = 0; header[19] = 0
+        header[20] = 1; header[21] = 0
+        header[22] = channels.toByte(); header[23] = 0
         header[24] = (sampleRate and 0xff).toByte(); header[25] = ((sampleRate shr 8) and 0xff).toByte(); header[26] = ((sampleRate shr 16) and 0xff).toByte(); header[27] = ((sampleRate shr 24) and 0xff).toByte()
         header[28] = (byteRate and 0xff).toByte(); header[29] = ((byteRate shr 8) and 0xff).toByte(); header[30] = ((byteRate shr 16) and 0xff).toByte(); header[31] = ((byteRate shr 24) and 0xff).toByte()
-        header[32] = blockAlign.toByte(); header[33] = ((blockAlign.toInt() shr 8) and 0xff).toByte() 
-        header[34] = bitsPerSample.toByte(); header[35] = 0 
+        header[32] = blockAlign.toByte(); header[33] = ((blockAlign.toInt() shr 8) and 0xff).toByte()
+        header[34] = bitsPerSample.toByte(); header[35] = 0
         header[36] = 'd'.code.toByte(); header[37] = 'a'.code.toByte(); header[38] = 't'.code.toByte(); header[39] = 'a'.code.toByte()
         header[40] = (dataSize and 0xff).toByte(); header[41] = ((dataSize shr 8) and 0xff).toByte(); header[42] = ((dataSize shr 16) and 0xff).toByte(); header[43] = ((dataSize shr 24) and 0xff).toByte()
         return header
     }
 
-    private fun AudioRecord.stopSafely() { try { if (state == AudioRecord.STATE_INITIALIZED && recordingState == AudioRecord.RECORDSTATE_RECORDING) stop() } catch (e: IllegalStateException) { Log.e(TAG, "AudioRecord.stop() failed safely", e) } }
-    private fun AudioRecord.releaseSafely() { try { if (state == AudioRecord.STATE_INITIALIZED) release() } catch (e: Exception) { Log.e(TAG, "AudioRecord.release() failed safely", e) } }
     private fun FileOutputStream.flushSafely() { try { flush() } catch (e: IOException) { Log.e(TAG, "FileOutputStream.flush() failed safely", e) } }
     private fun FileOutputStream.closeSafely() { try { close() } catch (e: IOException) { Log.e(TAG, "FileOutputStream.close() failed safely", e) } }
 
     override fun onDestroyView() {
         super.onDestroyView()
+        Log.d(TAG, "onDestroyView - Stopping recording if active.")
         if (isRecording) {
-            stopRecordingInternal(false) 
+            stopRecordingInternal(false) // This will also nullify currentSessionRecognizer if it was active
         }
-        recognizer?.close() 
-        recognizer = null
-        mediaPlayer?.release()
-        mediaPlayer = null
+        // Ensure any lingering session recognizer is closed if not handled by stopRecordingInternal
+        currentSessionRecognizer?.let {
+            try {
+                it.close()
+                Log.i(TAG, "CurrentSessionRecognizer closed in onDestroyView.")
+            } catch (e: Exception) {
+                Log.e(TAG, "Error closing currentSessionRecognizer in onDestroyView", e)
+            }
+            currentSessionRecognizer = null
+        }
+
+        Log.d(TAG, "onDestroyView - Releasing ExoPlayer.")
+        exoPlayer?.release()
+        exoPlayer = null
+
         (activity as? AppCompatActivity)?.setSupportActionBar(null)
         _binding = null
-        Log.d(TAG, "StoryReadingFragment onDestroyView")
+        Log.d(TAG, "StoryReadingFragment onDestroyView completed.")
     }
 
     companion object {
-        private const val ARG_STORY_CONTENT = "story_content" 
-        private const val ARG_STORY_TITLE = "story_title"   
+        private const val ARG_STORY_CONTENT = "story_content"
+        private const val ARG_STORY_TITLE = "story_title"
         private const val TAG = "StoryReadingFragment"
 
         @JvmStatic
