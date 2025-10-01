@@ -10,25 +10,14 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
-import androidx.compose.foundation.layout.padding
-import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.getValue
-import androidx.compose.ui.Modifier
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.lifecycleScope
-import androidx.navigation.NavDestination.Companion.hierarchy
-import androidx.navigation.NavGraph.Companion.findStartDestination
-import androidx.navigation.compose.*
 import com.example.realtalkenglishwithAI.MyApplication
-import com.example.realtalkenglishwithAI.navigation.Screen
-import com.example.realtalkenglishwithAI.navigation.bottomNavScreens
-import com.example.realtalkenglishwithAI.ui.screens.HomeScreen
-import com.example.realtalkenglishwithAI.ui.screens.PracticeScreen
-import com.example.realtalkenglishwithAI.ui.screens.ProgressScreen
-import com.example.realtalkenglishwithAI.ui.screens.ProfileScreen
-import com.example.realtalkenglishwithAI.ui.theme.RealTalkEnglishWithAITheme // Đảm bảo theme này tồn tại
+// Quan trọng: Import MainAppNavigation từ package navigation
+import com.example.realtalkenglishwithAI.navigation.MainAppNavigation
+import com.example.realtalkenglishwithAI.ui.theme.RealTalkEnglishWithAITheme
 import com.example.realtalkenglishwithAI.viewmodel.ModelState
 import com.example.realtalkenglishwithAI.viewmodel.VoskModelViewModel
 import kotlinx.coroutines.launch
@@ -48,7 +37,7 @@ class MainActivity : ComponentActivity() {
 
         setContent {
             RealTalkEnglishWithAITheme { // Áp dụng theme của ứng dụng
-                MainAppNavigation() // Đổi tên MainScreen thành MainAppNavigation cho rõ ràng
+                MainAppNavigation() // Gọi hàm MainAppNavigation đã được import
             }
         }
 
@@ -81,7 +70,6 @@ class MainActivity : ComponentActivity() {
                     ModelState.IDLE -> {
                         Log.d(logTag, "Trạng thái unpacking của MyApplication là IDLE.")
                     }
-                     // Thêm trường hợp else hoặc null check nếu cần
                     else -> {
                         Log.d(logTag, "Trạng thái unpacking không xác định: $state")
                     }
@@ -101,49 +89,7 @@ class MainActivity : ComponentActivity() {
     }
 }
 
-@OptIn(ExperimentalMaterial3Api::class) // Scaffold là experimental trong M3
-@Composable
-fun MainAppNavigation() {
-    val navController = rememberNavController()
-    Scaffold(
-        bottomBar = {
-            NavigationBar {
-                val navBackStackEntry by navController.currentBackStackEntryAsState()
-                val currentDestination = navBackStackEntry?.destination
-
-                bottomNavScreens.forEach { screen ->
-                    NavigationBarItem(
-                        selected = currentDestination?.hierarchy?.any { it.route == screen.route } == true,
-                        onClick = {
-                            navController.navigate(screen.route) {
-                                popUpTo(navController.graph.findStartDestination().id) {
-                                    saveState = true
-                                }
-                                launchSingleTop = true
-                                restoreState = true
-                            }
-                        },
-                        icon = { Icon(screen.icon, contentDescription = screen.title) },
-                        label = { Text(screen.title) }
-                    )
-                }
-            }
-        }
-    ) { innerPadding ->
-        NavHost(
-            navController = navController,
-            startDestination = Screen.Home.route,
-            modifier = Modifier.padding(innerPadding)
-        ) {
-            composable(Screen.Home.route) { HomeScreen(/* Có thể truyền navController nếu HomeScreen cần */) }
-            composable(Screen.Practice.route) { PracticeScreen(/* ... */) }
-            composable(Screen.Progress.route) { ProgressScreen(/* ... */) }
-            composable(Screen.Profile.route) { ProfileScreen(/* ... */) }
-            // Các composable route khác có thể được định nghĩa ở đây
-        }
-    }
-}
-
+// Hàm Preview này vẫn giữ nguyên vì nó cần gọi MainAppNavigation
 @Preview(showBackground = true)
 @Composable
 fun DefaultPreview() {
