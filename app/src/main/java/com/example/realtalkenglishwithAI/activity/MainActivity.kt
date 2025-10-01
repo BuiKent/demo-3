@@ -1,211 +1,93 @@
 package com.example.realtalkenglishwithAI.activity
 
 import android.Manifest
-import android.content.Context
-import android.content.SharedPreferences
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
 import android.util.Log
 import android.widget.Toast
+import androidx.activity.ComponentActivity
+import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
-import androidx.appcompat.app.AppCompatActivity
+import androidx.compose.foundation.layout.padding
+import androidx.compose.material3.*
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.tooling.preview.Preview
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.lifecycleScope
-import androidx.navigation.fragment.NavHostFragment
-import androidx.navigation.ui.setupWithNavController
-// import androidx.work.OneTimeWorkRequestBuilder // Comment out or remove if not using WorkManager yet
-// import androidx.work.WorkManager // Comment out or remove if not using WorkManager yet
-// import androidx.work.workDataOf // Comment out or remove if not using WorkManager yet
-import com.example.realtalkenglishwithAI.R
-import com.example.realtalkenglishwithAI.databinding.ActivityMainBinding
+import androidx.navigation.NavDestination.Companion.hierarchy
+import androidx.navigation.NavGraph.Companion.findStartDestination
+import androidx.navigation.compose.*
+import com.example.realtalkenglishwithAI.MyApplication
+import com.example.realtalkenglishwithAI.navigation.Screen
+import com.example.realtalkenglishwithAI.navigation.bottomNavScreens
+import com.example.realtalkenglishwithAI.ui.screens.HomeScreen
+import com.example.realtalkenglishwithAI.ui.screens.PracticeScreen
+import com.example.realtalkenglishwithAI.ui.screens.ProgressScreen
+import com.example.realtalkenglishwithAI.ui.screens.ProfileScreen
+import com.example.realtalkenglishwithAI.ui.theme.RealTalkEnglishWithAITheme // Đảm bảo theme này tồn tại
+import com.example.realtalkenglishwithAI.viewmodel.ModelState
 import com.example.realtalkenglishwithAI.viewmodel.VoskModelViewModel
-// import com.example.realtalkenglishwithAI.worker.UnzipModelWorker // Assuming you might create this later
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
-import java.io.File
-import java.io.FileOutputStream
-import java.io.IOException
-import java.util.zip.ZipInputStream
 
-class MainActivity : AppCompatActivity() {
+class MainActivity : ComponentActivity() {
 
-    private lateinit var binding: ActivityMainBinding
     private val logTag = "MainActivityVosk"
     private val voskModelViewModel: VoskModelViewModel by viewModels()
 
     private val requestPermissionLauncher =
         registerForActivityResult(ActivityResultContracts.RequestPermission()) { /* isGranted: Boolean -> */
-            // Handle permission result if needed in the future.
+            // Xử lý kết quả quyền nếu cần
         }
-
-    companion object {
-        private const val PREFS_NAME = "VoskModelPrefs"
-        private const val KEY_MODEL_UNZIPPED_SUCCESSFULLY = "model_unzipped_successfully_v1" // Added _v1 for versioning
-    }
-
-    private lateinit var prefs: SharedPreferences
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        binding = ActivityMainBinding.inflate(layoutInflater)
-        setContentView(binding.root)
 
-        prefs = getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        setContent {
+            RealTalkEnglishWithAITheme { // Áp dụng theme của ứng dụng
+                MainAppNavigation() // Đổi tên MainScreen thành MainAppNavigation cho rõ ràng
+            }
+        }
 
         askNotificationPermission()
-        setupNavigation()
-        prepareVoskModelAssets()
+        observeAndTriggerModelInitialization()
 
         voskModelViewModel.errorMessage.observe(this) { errorMessage ->
             errorMessage?.let {
-                Toast.makeText(this, "Model Initialization Error: $it", Toast.LENGTH_LONG).show()
+                Toast.makeText(this, "Model Init Error: $it", Toast.LENGTH_LONG).show()
                 Log.e(logTag, "VoskModelViewModel error: $it")
-                // voskModelViewModel.clearErrorMessage() // Consider adding this to ViewModel
             }
         }
     }
 
-    private fun setupNavigation() {
-        val navHostFragment =
-            supportFragmentManager.findFragmentById(R.id.nav_host_fragment) as NavHostFragment
-        val navController = navHostFragment.navController
-        binding.bottomNav.setupWithNavController(navController)
-    }
-
-    private fun isModelUnzippedSuccessfully(): Boolean {
-        return prefs.getBoolean(KEY_MODEL_UNZIPPED_SUCCESSFULLY, false)
-    }
-
-    private fun setModelUnzippedSuccessfully(success: Boolean) {
-        prefs.edit().putBoolean(KEY_MODEL_UNZIPPED_SUCCESSFULLY, success).apply()
-    }
-
-    private fun prepareVoskModelAssets() {
-        val modelDir = File(filesDir, "model")
-        val modelAssetFileName = "vosk-model.zip"
-
-        if (isModelUnzippedSuccessfully()) {
-            Log.i(logTag, "Model previously unzipped (flagged in SharedPreferences). Triggering ViewModel to load/verify.")
-            // Still good to verify physical presence in case of data clear or external deletion not reflected in prefs
-            val amFile = File(modelDir, "am")
-            val confFile = File(modelDir, "conf")
-            if (modelDir.exists() && amFile.exists() && confFile.exists()) {
-                voskModelViewModel.initModelAfterUnzip()
-                return
-            } else {
-                Log.w(logTag, "SharedPreferences flag is true, but model files are missing. Will attempt to re-unzip.")
-                setModelUnzippedSuccessfully(false) // Reset flag as files are missing
-            }
-        }
-
-        // If not unzipped successfully via SharedPreferences, or if files were missing despite flag,
-        // proceed with physical check and potential unzip.
-        val amFile = File(modelDir, "am") // Re-declare for this scope if needed or use previous
-        val confFile = File(modelDir, "conf")
-        val areModelFilesPhysicallyPresentAndValid = modelDir.exists() && modelDir.isDirectory &&
-                                                     amFile.exists() && amFile.isDirectory &&
-                                                     confFile.exists() && confFile.isDirectory &&
-                                                     (modelDir.listFiles()?.isNotEmpty() == true)
-
-        if (!areModelFilesPhysicallyPresentAndValid) {
-            Log.i(logTag, "Vosk model files at ${modelDir.absolutePath} are missing or incomplete. Attempting to unzip from assets: $modelAssetFileName")
-            
-            // --- Option 1: Using Coroutine (current approach, slightly modified) ---
-            lifecycleScope.launch(Dispatchers.IO) {
-                try {
-                    unzipAssetToDirectory(applicationContext, modelAssetFileName, modelDir)
-                    Log.i(logTag, "Successfully unzipped $modelAssetFileName. Setting SharedPreferences flag.")
-                    setModelUnzippedSuccessfully(true)
-                    withContext(Dispatchers.Main) {
+    private fun observeAndTriggerModelInitialization() {
+        lifecycleScope.launch {
+            (applicationContext as MyApplication).unpackingState.collect { state ->
+                when (state) {
+                    ModelState.READY -> {
+                        Log.i(logTag, "MyApplication báo model đã unpack. Đang khởi tạo VoskModelViewModel.")
                         voskModelViewModel.initModelAfterUnzip()
                     }
-                } catch (e: Exception) {
-                    Log.e(logTag, "Critical error during Vosk model unzipping ($modelAssetFileName): ${e.message}", e)
-                    setModelUnzippedSuccessfully(false) // Ensure flag is false on error
-                    withContext(Dispatchers.Main) {
-                        Toast.makeText(this@MainActivity, "Failed to prepare speech model assets: ${e.localizedMessage}", Toast.LENGTH_LONG).show()
+                    ModelState.LOADING -> {
+                        Log.i(logTag, "MyApplication đang unpack/xác minh Vosk model...")
+                    }
+                    ModelState.ERROR -> {
+                        Log.e(logTag, "MyApplication báo lỗi khi unpack Vosk model.")
+                        Toast.makeText(this@MainActivity, "Lỗi nghiêm trọng: Không thể chuẩn bị tài nguyên model giọng nói.", Toast.LENGTH_LONG).show()
+                    }
+                    ModelState.IDLE -> {
+                        Log.d(logTag, "Trạng thái unpacking của MyApplication là IDLE.")
+                    }
+                     // Thêm trường hợp else hoặc null check nếu cần
+                    else -> {
+                        Log.d(logTag, "Trạng thái unpacking không xác định: $state")
                     }
                 }
             }
-            // --- End Option 1 ---
-
-            // --- Option 2: Using WorkManager (recommended for more robust background work) ---
-            // Log.i(logTag, "Enqueueing WorkManager to unzip Vosk model assets.")
-            // val unzipWorkRequest = OneTimeWorkRequestBuilder<UnzipModelWorker>()
-            //    .setInputData(workDataOf(
-            //        UnzipModelWorker.KEY_ASSET_FILE_NAME to modelAssetFileName,
-            //        UnzipModelWorker.KEY_TARGET_DIRECTORY to modelDir.absolutePath
-            //    ))
-            //    .build()
-            // WorkManager.getInstance(applicationContext).enqueue(unzipWorkRequest)
-            //
-            // // You would then observe the WorkInfo from the ViewModel or another mechanism
-            // // to know when to call voskModelViewModel.initModelAfterUnzip() and set SharedPreferences flag.
-            // // For simplicity, this example doesn't include the full observation logic for WorkManager.
-            // // For now, with WorkManager, initModelAfterUnzip might be called by the Worker on success,
-            // // or MainActivity observes WorkInfo and calls it.
-            // // The SharedPreferences flag would also be set by the Worker or by MainActivity on observing success.
-            // --- End Option 2 ---
-
-        } else {
-            Log.i(logTag, "Vosk model files appear to be physically present at ${modelDir.absolutePath}. Setting SharedPreferences flag and triggering ViewModel.")
-            setModelUnzippedSuccessfully(true) // Ensure flag is set if files are already there
-            voskModelViewModel.initModelAfterUnzip()
         }
-    }
-
-    @Throws(IOException::class)
-    private fun unzipAssetToDirectory(context: Context, assetFileName: String, targetDirectory: File) {
-        Log.d(logTag, "Unzipping $assetFileName to ${targetDirectory.absolutePath}")
-
-        if (targetDirectory.exists()) {
-            Log.d(logTag, "Target directory '${targetDirectory.name}' exists. Deleting recursively before unzipping...")
-            if (!targetDirectory.deleteRecursively()) {
-                Log.w(logTag, "Failed to delete existing target directory: ${targetDirectory.absolutePath}. Proceeding with caution.")
-            }
-        }
-
-        Log.d(logTag, "Creating target directory: ${targetDirectory.absolutePath}")
-        if (!targetDirectory.mkdirs()) {
-            if (!targetDirectory.isDirectory) {
-                 throw IOException("Failed to create target directory '${targetDirectory.absolutePath}'. It might be an existing file or access issue.")
-            }
-            Log.d(logTag, "Target directory '${targetDirectory.name}' either already existed or was created by another process. Assuming okay.")
-        }
-
-        context.assets.open(assetFileName).use { inputStream ->
-            ZipInputStream(inputStream.buffered()).use { zis ->
-                var zipEntry = zis.nextEntry
-                while (zipEntry != null) {
-                    val newFile = File(targetDirectory, zipEntry.name)
-                    if (!newFile.canonicalPath.startsWith(targetDirectory.canonicalPath + File.separator)) {
-                        throw SecurityException("Zip entry '${zipEntry.name}' is trying to escape the target directory.")
-                    }
-
-                    if (zipEntry.isDirectory) {
-                        if (!newFile.mkdirs() && !newFile.isDirectory) { 
-                            throw IOException("Failed to create directory ${newFile.absolutePath}")
-                        }
-                    } else {
-                        val parent = newFile.parentFile
-                        if (parent != null && !parent.exists()) {
-                            if (!parent.mkdirs() && !parent.isDirectory) {
-                                throw IOException("Failed to create parent directory ${parent.absolutePath}")
-                            }
-                        }
-                        FileOutputStream(newFile).use { fos ->
-                            zis.copyTo(fos)
-                        }
-                    }
-                    zis.closeEntry()
-                    zipEntry = zis.nextEntry
-                }
-            }
-        }
-        Log.d(logTag, "Successfully unzipped $assetFileName to ${targetDirectory.absolutePath}")
     }
 
     private fun askNotificationPermission() {
@@ -216,5 +98,56 @@ class MainActivity : AppCompatActivity() {
                 requestPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
             }
         }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class) // Scaffold là experimental trong M3
+@Composable
+fun MainAppNavigation() {
+    val navController = rememberNavController()
+    Scaffold(
+        bottomBar = {
+            NavigationBar {
+                val navBackStackEntry by navController.currentBackStackEntryAsState()
+                val currentDestination = navBackStackEntry?.destination
+
+                bottomNavScreens.forEach { screen ->
+                    NavigationBarItem(
+                        selected = currentDestination?.hierarchy?.any { it.route == screen.route } == true,
+                        onClick = {
+                            navController.navigate(screen.route) {
+                                popUpTo(navController.graph.findStartDestination().id) {
+                                    saveState = true
+                                }
+                                launchSingleTop = true
+                                restoreState = true
+                            }
+                        },
+                        icon = { Icon(screen.icon, contentDescription = screen.title) },
+                        label = { Text(screen.title) }
+                    )
+                }
+            }
+        }
+    ) { innerPadding ->
+        NavHost(
+            navController = navController,
+            startDestination = Screen.Home.route,
+            modifier = Modifier.padding(innerPadding)
+        ) {
+            composable(Screen.Home.route) { HomeScreen(/* Có thể truyền navController nếu HomeScreen cần */) }
+            composable(Screen.Practice.route) { PracticeScreen(/* ... */) }
+            composable(Screen.Progress.route) { ProgressScreen(/* ... */) }
+            composable(Screen.Profile.route) { ProfileScreen(/* ... */) }
+            // Các composable route khác có thể được định nghĩa ở đây
+        }
+    }
+}
+
+@Preview(showBackground = true)
+@Composable
+fun DefaultPreview() {
+    RealTalkEnglishWithAITheme {
+        MainAppNavigation()
     }
 }

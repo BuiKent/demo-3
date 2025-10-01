@@ -50,6 +50,8 @@
     <!-- Story Activity / Fragment -->
     <string name="today_s_story">Monday</string>
     <string name="todays_story_content">This is a story for Monday. The build process can fail if resources are not found in the layout file.</string>
+    <string name="tuesday_story_title">Tuesday\'s Adventure</string>
+    <string name="tuesday_story_content">On a bright Tuesday morning, a little squirrel decided to explore the tallest tree in the forest. It was a day full of surprises and new friends.</string>
     <string name="record_audio">Record Audio</string>
     <string name="play_audio">Play Audio</string>
 
